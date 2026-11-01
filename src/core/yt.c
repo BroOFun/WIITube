@@ -364,13 +364,21 @@ static void feed_item(yt_feed *f, const cJSON *item, int depth, int shelf)
     if (!item || depth > 4)
         return;
     memset(&r, 0, sizeof r);
-    if ((x = jpath(item, "videoRenderer")) && jstr(x, "videoId")) {
+    if (((x = jpath(item, "videoRenderer")) || (x = jpath(item, "gridVideoRenderer")) ||
+         (x = jpath(item, "compactVideoRenderer"))) && jstr(x, "videoId")) {
         copy_str(r.video_id, sizeof r.video_id, jstr(x, "videoId"));
         jtext(jpath(x, "title"), r.title, sizeof r.title);
         jtext(jpath(x, "ownerText"), r.channel, sizeof r.channel);
         if (!r.channel[0])
+            jtext(jpath(x, "shortBylineText"), r.channel, sizeof r.channel);
+        if (!r.channel[0])
             jtext(jpath(x, "longBylineText"), r.channel, sizeof r.channel);
         jtext(jpath(x, "lengthText"), r.duration, sizeof r.duration);
+        if (!r.duration[0]) {
+            cJSON_ArrayForEach(c, jpath(x, "thumbnailOverlays"))
+                if (jpath(c, "thumbnailOverlayTimeStatusRenderer.text"))
+                    jtext(jpath(c, "thumbnailOverlayTimeStatusRenderer.text"), r.duration, sizeof r.duration);
+        }
         jtext(jpath(x, "shortViewCountText"), r.views, sizeof r.views);
         jtext(jpath(x, "publishedTimeText"), r.published, sizeof r.published);
         s = jstr(x, "navigationEndpoint.commandMetadata.webCommandMetadata.url");
@@ -386,11 +394,27 @@ static void feed_item(yt_feed *f, const cJSON *item, int depth, int shelf)
         jtext(jpath(x, "viewCountText"), r.views, sizeof r.views);
         r.is_short = 1;
     } else if ((x = jpath(item, "lockupViewModel")) && jstr(x, "contentId")) {
+        const cJSON *rows, *ov;
         s = jstr(x, "contentType");
         if (s && strcmp(s, "LOCKUP_CONTENT_TYPE_VIDEO") != 0)
-            return;
+            return; /* playlists, mixes, channels */
         copy_str(r.video_id, sizeof r.video_id, jstr(x, "contentId"));
         jtext(jpath(x, "metadata.lockupMetadataViewModel.title"), r.title, sizeof r.title);
+        rows = jpath(x, "metadata.lockupMetadataViewModel.metadata.contentMetadataViewModel.metadataRows");
+        copy_str(r.channel, sizeof r.channel, jstr(rows, "0.metadataParts.0.text.content"));
+        copy_str(r.views, sizeof r.views, jstr(rows, "1.metadataParts.0.text.content"));
+        copy_str(r.published, sizeof r.published, jstr(rows, "1.metadataParts.1.text.content"));
+        if (r.views[0] && !strchr(r.views, ' ') && strlen(r.views) < sizeof r.views - 7)
+            strcat(r.views, " views"); /* "208M" -> "208M views" as elsewhere */
+        cJSON_ArrayForEach(c, jpath(x, "contentImage.thumbnailViewModel.overlays")) {
+            ov = jpath(c, "thumbnailBottomOverlayViewModel.badges.0.thumbnailBadgeViewModel.text");
+            if (!ov)
+                ov = jpath(c, "thumbnailOverlayBadgeViewModel.thumbnailBadges.0.thumbnailBadgeViewModel.text");
+            if (cJSON_IsString(ov))
+                copy_str(r.duration, sizeof r.duration, ov->valuestring);
+        }
+        s = jstr(x, "rendererContext.commandContext.onTap.innertubeCommand.commandMetadata.webCommandMetadata.url");
+        r.is_short = s && strncmp(s, "/shorts/", 8) == 0;
     } else {
         /* Containers: shelves of videos or Shorts (a Shorts shelf gets a new number). */
         static const struct {
@@ -422,24 +446,150 @@ static void feed_item(yt_feed *f, const cJSON *item, int depth, int shelf)
     yt_feed_add(f, &r);
 }
 
-static void feed_sections(yt_feed *f, const cJSON *sections)
+/* A list of entries as YouTube sends them: items, sections of items, and a continuation
+ * item (the token for the next page) somewhere among them. */
+static void feed_list(yt_feed *f, const cJSON *list, int depth)
 {
-    const cJSON *sec, *item;
-    free(f->continuation);
-    f->continuation = NULL;
-    cJSON_ArrayForEach(sec, sections) {
-        const char *tok = jstr(sec, "continuationItemRenderer.continuationEndpoint.continuationCommand.token");
+    const cJSON *item;
+    cJSON_ArrayForEach(item, list) {
+        const char *tok = jstr(item, "continuationItemRenderer.continuationEndpoint.continuationCommand.token");
+        if (!tok)
+            tok = jstr(item, "continuationItemRenderer.button.buttonRenderer.command.continuationCommand.token");
         if (tok) {
             free(f->continuation);
             f->continuation = strdup(tok);
-            continue;
-        }
-        cJSON_ArrayForEach(item, jpath(sec, "itemSectionRenderer.contents"))
+        } else if (jpath(item, "itemSectionRenderer.contents") && depth < 2) {
+            feed_list(f, jpath(item, "itemSectionRenderer.contents"), depth + 1);
+        } else {
             feed_item(f, item, 0, 0);
+        }
     }
 }
 
+static void feed_sections(yt_feed *f, const cJSON *sections)
+{
+    free(f->continuation);
+    f->continuation = NULL;
+    feed_list(f, sections, 0);
+}
+
 static int feed_count(const yt_feed *f) { return f->n; }
+
+/* ---- recommendations ("Up next") and the Shorts feed ---- */
+
+/* Word number i (space separated) of list, as a video ID. */
+static int nth_id(const char *list, int i, char out[16])
+{
+    const char *p = list;
+    while (*p) {
+        size_t n;
+        while (*p == ' ')
+            p++;
+        n = strcspn(p, " ");
+        if (n == 0)
+            break;
+        if (i-- == 0) {
+            if (n >= 16)
+                return -1;
+            memcpy(out, p, n);
+            out[n] = 0;
+            return 0;
+        }
+        p += n;
+    }
+    return -1;
+}
+
+/* Remove entries the user has already watched (the seeds of a recommendation list). */
+static void drop_watched(yt_feed *f, int from)
+{
+    int i, o = from;
+    for (i = from; i < f->n; i++) {
+        if (strstr(f->query, f->items[i].video_id)) {
+            if (f->items[i].is_short)
+                f->nshorts--;
+            continue;
+        }
+        f->items[o++] = f->items[i];
+    }
+    f->n = o;
+}
+
+/* One page of YouTube's "Up next" recommendations for video_id (or the page after token). */
+static int related_page(yt_feed *f, const char *video_id, const char *token, char *err, size_t errlen)
+{
+    cJSON *body = cJSON_CreateObject(), *resp;
+    const int before = f->n;
+    if (token)
+        cJSON_AddStringToObject(body, "continuation", token);
+    else
+        cJSON_AddStringToObject(body, "videoId", video_id);
+    resp = innertube("next", "web", body, NULL, err, errlen);
+    if (!resp)
+        return -1;
+    if (token)
+        feed_sections(f, jpath(resp, "onResponseReceivedEndpoints.0.appendContinuationItemsAction.continuationItems"));
+    else
+        feed_sections(f, jpath(resp, "contents.twoColumnWatchNextResults.secondaryResults.secondaryResults.results"));
+    cJSON_Delete(resp);
+    drop_watched(f, before);
+    return 0;
+}
+
+static void base64(const unsigned char *in, size_t n, char *out)
+{
+    static const char t[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t i, o = 0;
+    for (i = 0; i < n; i += 3) {
+        unsigned v = (unsigned)in[i] << 16 | (i + 1 < n ? (unsigned)in[i + 1] << 8 : 0) | (i + 2 < n ? in[i + 2] : 0);
+        out[o++] = t[v >> 18 & 63];
+        out[o++] = t[v >> 12 & 63];
+        out[o++] = i + 1 < n ? t[v >> 6 & 63] : '=';
+        out[o++] = i + 2 < n ? t[v & 63] : '=';
+    }
+    out[o] = 0;
+}
+
+/* YouTube's Shorts feed continuing from the Short seed_id (what the Shorts player shows
+ * after it). The request names the Short as protobuf field 1, like the sequenceParams of
+ * a reelWatchEndpoint. The next page continues from the last Short of this one. */
+static int reels_page(yt_feed *f, const char *seed_id, char *err, size_t errlen)
+{
+    unsigned char pb[2 + 15];
+    char params[32];
+    const size_t len = strlen(seed_id);
+    cJSON *body, *resp;
+    const cJSON *e;
+    const char *last = NULL;
+    if (len == 0 || len > 15) {
+        snprintf(err, errlen, "bad Short ID");
+        return -1;
+    }
+    pb[0] = 0x0a;
+    pb[1] = (unsigned char)len;
+    memcpy(pb + 2, seed_id, len);
+    base64(pb, 2 + len, params);
+    body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "sequenceParams", params);
+    resp = innertube("reel/reel_watch_sequence", "web", body, NULL, err, errlen);
+    if (!resp)
+        return -1;
+    cJSON_ArrayForEach(e, jpath(resp, "entries")) {
+        yt_search_result r;
+        const char *id = jstr(e, "command.reelWatchEndpoint.videoId");
+        if (!id)
+            continue;
+        memset(&r, 0, sizeof r);
+        copy_str(r.video_id, sizeof r.video_id, id);
+        r.is_short = 1;
+        yt_feed_add(f, &r);
+        last = id;
+    }
+    free(f->continuation);
+    f->continuation = last ? strdup(last) : NULL;
+    cJSON_Delete(resp);
+    return 0;
+}
 
 int yt_feed_start(yt_feed *f, const char *query, int kind, char *err, size_t errlen)
 {
@@ -450,6 +600,8 @@ int yt_feed_start(yt_feed *f, const char *query, int kind, char *err, size_t err
     copy_str(f->query, sizeof f->query, query);
     if (ensure_rules(err, errlen) != 0)
         return -1;
+    if (kind == YT_FEED_RELATED || kind == YT_FEED_REELS)
+        return yt_feed_more(f, err, errlen) < 0 ? -1 : feed_count(f);
     client_key = jstr(g_rules, "search.client");
     body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "query", query);
@@ -468,6 +620,37 @@ int yt_feed_more(yt_feed *f, char *err, size_t errlen)
     cJSON *body, *resp;
     const char *client_key;
     int before = feed_count(f);
+    char id[16];
+
+    if (f->kind == YT_FEED_RELATED) {
+        /* First page of each watched video's recommendations, then keep following the
+         * last one. */
+        int rc;
+        if (nth_id(f->query, f->pos, id) == 0) {
+            f->pos++;
+            rc = related_page(f, id, NULL, err, errlen);
+        } else if (f->continuation && f->continuation[0] != '+') {
+            char *tok = f->continuation;
+            f->continuation = NULL;
+            rc = related_page(f, NULL, tok, err, errlen);
+            free(tok);
+        } else {
+            return 0;
+        }
+        if (rc != 0)
+            return -1;
+        if (!f->continuation && nth_id(f->query, f->pos, id) == 0)
+            f->continuation = strdup("+"); /* more watched videos to go */
+        return feed_count(f) - before;
+    }
+    if (f->kind == YT_FEED_REELS) {
+        const char *seed = f->continuation ? f->continuation : f->query;
+        char s[16];
+        copy_str(s, sizeof s, seed);
+        if (reels_page(f, s, err, errlen) != 0)
+            return -1;
+        return feed_count(f) - before;
+    }
     if (!f->continuation)
         return 0;
     client_key = jstr(g_rules, "search.client");
@@ -481,15 +664,36 @@ int yt_feed_more(yt_feed *f, char *err, size_t errlen)
     return feed_count(f) - before;
 }
 
-int yt_feed_parse_json(yt_feed *f, const char *json, int continuation_page)
+int yt_feed_parse_json(yt_feed *f, const char *json, int page)
 {
     cJSON *resp = cJSON_Parse(json);
+    const cJSON *e;
     if (!resp)
         return -1;
-    if (continuation_page)
-        feed_sections(f, jpath(resp, "onResponseReceivedCommands.0.appendContinuationItemsAction.continuationItems"));
-    else
+    switch (page) {
+    case YT_PAGE_SEARCH:
         feed_sections(f, jpath(resp, "contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents"));
+        break;
+    case YT_PAGE_SEARCH_MORE:
+        feed_sections(f, jpath(resp, "onResponseReceivedCommands.0.appendContinuationItemsAction.continuationItems"));
+        break;
+    case YT_PAGE_RELATED:
+        feed_sections(f, jpath(resp, "contents.twoColumnWatchNextResults.secondaryResults.secondaryResults.results"));
+        drop_watched(f, 0);
+        break;
+    case YT_PAGE_REELS:
+        cJSON_ArrayForEach(e, jpath(resp, "entries")) {
+            yt_search_result r;
+            const char *id = jstr(e, "command.reelWatchEndpoint.videoId");
+            if (!id)
+                continue;
+            memset(&r, 0, sizeof r);
+            copy_str(r.video_id, sizeof r.video_id, id);
+            r.is_short = 1;
+            yt_feed_add(f, &r);
+        }
+        break;
+    }
     cJSON_Delete(resp);
     return 0;
 }

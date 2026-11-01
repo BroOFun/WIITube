@@ -145,41 +145,6 @@ static int count_ids(const char *json)
     return n;
 }
 
-/* Experiment: does YouTube build a logged-out home feed after watches are reported
- * (playback + watchtime pings, as yt-dlp's --mark-watched does)? */
-static void watch_experiment(const char *dir)
-{
-    static const char *ids[] = { "dQw4w9WgXcQ", "9bZkp7q19f0", "kJQP7kiw5Fk", "JGwWNGJdvx8" };
-    char err[512], body[256], url[8192];
-    int i;
-    for (i = 0; i < 4; i++) {
-        cJSON *r, *u;
-        char *j;
-        snprintf(body, sizeof body, "{\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}", ids[i]);
-        j = yt_raw("player", "visionos", body, err, sizeof err);
-        r = j ? cJSON_Parse(j) : NULL;
-        u = find(r, "videostatsPlaybackUrl");
-        u = u ? cJSON_GetObjectItem(u, "baseUrl") : NULL;
-        if (cJSON_IsString(u)) {
-            snprintf(url, sizeof url, "%s&ver=2&cpn=WiiTubeCpn%06d&cmt=0", u->valuestring, i);
-            fetch(dir, "ping_playback.txt", url, NULL);
-        }
-        u = find(r, "videostatsWatchtimeUrl");
-        u = u ? cJSON_GetObjectItem(u, "baseUrl") : NULL;
-        if (cJSON_IsString(u)) {
-            snprintf(url, sizeof url, "%s&ver=2&cpn=WiiTubeCpn%06d&cmt=120&st=0&et=120&state=playing", u->valuestring, i);
-            fetch(dir, "ping_watchtime.txt", url, NULL);
-        }
-        cJSON_Delete(r);
-        free(j);
-    }
-    {
-        char *j = raw(dir, "home_after_watch.json", "browse", "web", "{\"browseId\":\"FEwhat_to_watch\"}");
-        printf("home after watching: %d videos\n", count_ids(j));
-        free(j);
-    }
-}
-
 int cmd_dump(const char *dir)
 {
     char body[8192];
@@ -251,7 +216,6 @@ int cmd_dump(const char *dir)
     raw(dir, "next_rick.json", "next", "web", "{\"videoId\":\"dQw4w9WgXcQ\"}");
     raw(dir, "next_tv_rick.json", "next", "tv", "{\"videoId\":\"dQw4w9WgXcQ\"}");
     raw(dir, "shorts_tab.json", "browse", "web", "{\"browseId\":\"FEshorts\"}");
-    watch_experiment(dir);
     j = raw(dir, "player_rick.json", "player", "visionos",
             "{\"videoId\":\"dQw4w9WgXcQ\",\"contentCheckOk\":true,\"racyCheckOk\":true}");
     if (j)

@@ -38,18 +38,22 @@ int job_collect(job *j); /* join a finished job; 1 if it was collected */
 void draw_message(const char *title, const char *detail, int busy);
 void error_screen(const char *title, const char *detail);
 
+/* ---- watch history (main.c) ---- */
+void history_add(const char *id, int is_short);
+const char *history_last_short(void); /* NULL if no Short has been watched */
+
 /* ---- player.c ---- */
 typedef struct {
-    const yt_feed *feed;  /* the list the video came from */
-    int index, is_short;  /* entry in feed->items (videos) or feed->shorts */
-    /* Called every frame during playback so page loading continues; need_more asks for
-     * the next page of feed (Shorts, when nearing the end of the list). */
-    void (*tick)(void *ud, int need_more);
+    const yt_feed *feed;     /* the list the video came from (NULL for the Shorts tab) */
+    int index;               /* its entry */
+    const char *shorts_from; /* Shorts tab: continue YouTube's Shorts feed from this Short (or NULL) */
+    /* Called every frame during playback so page loading in the background continues. */
+    void (*tick)(void *ud);
     void *tick_ud;
 } play_request;
 
-/* Play until the user goes back. Returns the index of the last entry played (Shorts can
- * move through the list). */
+/* Play until the user goes back. A Short opens the vertical Shorts player, where Up/Down
+ * move through YouTube's Shorts feed. Returns the entry of feed played last (or -1). */
 int player_run(play_request *req);
 
 #endif

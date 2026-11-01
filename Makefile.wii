@@ -10,7 +10,7 @@ ifeq ($(strip $(DEVKITPPC)),)
 $(error DEVKITPPC is not set; build inside the devkitpro/devkitppc container)
 endif
 
-APP_VERSION   ?= 0.5
+APP_VERSION   ?= 0.6
 FFMPEG_PREFIX ?= build/ffmpeg-wii
 CACERT        ?= deps/src/cacert.pem
 

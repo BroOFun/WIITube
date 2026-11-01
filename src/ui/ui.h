@@ -70,34 +70,38 @@ rgba_t ui_alpha(rgba_t c, float a); /* scale a colour's alpha */
 /* Thumbnail lookup: vertical = the 9:16 picture wanted (Shorts). */
 typedef const wt_image *(*ui_thumb_fn)(void *ud, const yt_search_result *r, int vertical);
 
-#define UI_NUM_CHIPS 8
-extern const char *const ui_chips[UI_NUM_CHIPS];
+#define UI_NUM_TOPICS 8
+extern const char *const ui_topics[UI_NUM_TOPICS];
 
-enum { PAGE_HOME, PAGE_SHORTS, PAGE_SEARCH, PAGE_COUNT };
+enum { PAGE_HOME, PAGE_SEARCH, PAGE_COUNT };
+enum { RAIL_HOME, RAIL_SHORTS, RAIL_SEARCH, RAIL_COUNT };
 enum { FOCUS_TOP, FOCUS_RAIL, FOCUS_CHIPS, FOCUS_GRID };
 enum { TOP_LOGO, TOP_SEARCH, TOP_QUALITY };
 
-/* One page of results. Home and Search show regular videos with a Shorts shelf; the Shorts
- * page shows a grid of Shorts. The feeds are filled by the app (in a background job that
- * hands complete pages over on the main thread). */
+#define UI_SHELF_SLOTS 32
+
+/* One page of results, in YouTube's order: videos, with Shorts shelves where YouTube puts
+ * them. The list is filled by the app (a background job hands complete pages over on the
+ * main thread). */
 typedef struct {
-    yt_feed videos, shorts;
-    int loading_videos, loading_shorts; /* a page is on its way */
+    yt_feed feed;
+    int loading;                        /* a page is on its way */
     int failed;                         /* last load failed (stops automatic retries) */
     char status[256];                   /* message shown when there are no results */
-    int chip;                           /* topic (Home, Shorts) */
+    int chip;                           /* Home: selected chip (see browse_chip_topic) */
     char query[64];                     /* Search */
-    int started;                        /* bit 1: videos requested, bit 2: Shorts requested */
+    int started;                        /* the first page has been asked for */
     int gen;                            /* changes when the page is reset (stale loads are dropped) */
     float scroll, scroll_to;            /* vertical scroll (animated towards scroll_to) */
-    int row, col;                       /* selection: row in the layout, column */
-    int shelf_sel;                      /* selected Short in the shelf */
-    float shelf_scroll, shelf_to;       /* first visible Short (animated) */
+    int row, col;                       /* selection: row in the layout, entry in the row */
+    float shelf_scroll[UI_SHELF_SLOTS]; /* first visible Short of each shelf (animated) */
+    float shelf_to[UI_SHELF_SLOTS];
 } browse_page;
 
 typedef struct {
     int page;                  /* PAGE_* */
     browse_page pages[PAGE_COUNT];
+    int has_for_you;           /* the "For you" chip exists (something has been watched) */
     int focus, top_sel, rail_sel, chip_sel;
     float chip_scroll;
     int quality;               /* 144/240/360/480 */
@@ -107,13 +111,13 @@ typedef struct {
     float drag_dy;
     int hover_kind, hover_index; /* what the pointer was on (for highlighting) */
     /* Set by browse_update: */
-    int want_videos, want_shorts;   /* the current page should load more (or its first page) */
-    const yt_feed *play_feed;       /* ACT_PLAY: the list and position to play */
-    int play_index, play_short;
+    int want_more;             /* the current page should load its first or next page */
+    const yt_feed *play_feed;  /* ACT_PLAY: the list and the entry to play */
+    int play_index;
 } browse_state;
 
 enum {
-    ACT_NONE, ACT_OPEN_KEYBOARD, ACT_CHIP, ACT_PAGE, ACT_PLAY, ACT_QUALITY, ACT_QUIT,
+    ACT_NONE, ACT_OPEN_KEYBOARD, ACT_CHIP, ACT_PAGE, ACT_PLAY, ACT_SHORTS, ACT_QUALITY, ACT_QUIT,
     ACT_KB_SEARCH, ACT_KB_CANCEL,
     ACT_PLAYER_BACK, ACT_PLAYER_PAUSE, ACT_PLAYER_VOLUME, ACT_PLAYER_SEEK, ACT_PLAYER_CAPTIONS,
     ACT_PLAYER_SET_QUALITY, ACT_PLAYER_SET_AUDIO, ACT_PLAYER_NEXT, ACT_PLAYER_PREV,
@@ -124,9 +128,11 @@ void browse_init(browse_state *b, const wt_image *logo);
 void browse_reset_page(browse_state *b, int page);
 /* Switch page (keeps each page's results). */
 void browse_set_page(browse_state *b, int page);
+/* Home chips: the topic searched for chip i, or NULL for "For you" (recommendations). */
+const char *browse_chip_topic(const browse_state *b, int i);
 int browse_update(browse_state *b, const ui_input *in);   /* returns ACT_* */
-/* After watching Shorts: select Short number i of the current page (shelf or grid). */
-void browse_select_short(browse_state *b, int i);
+/* Select entry i of the current page (e.g. the last Short watched). */
+void browse_select(browse_state *b, int i);
 void browse_draw(browse_state *b, ui_thumb_fn thumb, void *ud);
 
 typedef struct {

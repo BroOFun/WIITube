@@ -44,7 +44,7 @@ static wt_image *thumbs[NSAMPLE], *short_thumbs[NSHORT];
 
 static const wt_image *get_thumb(void *ud, const yt_search_result *r, int vertical)
 {
-    int i = atoi(r->video_id + 1);
+    int i = atoi(r->video_id + 1); /* "t3_1" -> 3 */
     (void)ud;
     (void)vertical;
     if (r->video_id[0] == 's')
@@ -82,33 +82,51 @@ static void save(const char *dir, const char *name, int width)
     soft_save_ppm(path);
 }
 
-/* Sample entries; repeat makes a longer list (ids stay unique). */
-static void fill_page(browse_page *pg, int repeat, int with_shorts)
+static void add_video(yt_feed *f, int i, int k)
 {
-    int i, k;
     yt_search_result r;
-    for (k = 0; k < repeat; k++)
-        for (i = 0; i < NSAMPLE; i++) {
-            memset(&r, 0, sizeof r);
-            snprintf(r.video_id, sizeof r.video_id, "t%d_%d", i, k);
-            snprintf(r.title, sizeof r.title, "%s", SAMPLE[i].title);
-            snprintf(r.channel, sizeof r.channel, "%s", SAMPLE[i].channel);
-            snprintf(r.duration, sizeof r.duration, "%s", SAMPLE[i].duration);
-            snprintf(r.views, sizeof r.views, "%s", SAMPLE[i].views);
-            snprintf(r.published, sizeof r.published, "%s", SAMPLE[i].published);
-            yt_feed_add(&pg->videos, &r);
-        }
-    for (k = 0; with_shorts && k < 2; k++)
-        for (i = 0; i < NSHORT; i++) {
-            memset(&r, 0, sizeof r);
-            snprintf(r.video_id, sizeof r.video_id, "s%d_%d", i, k);
-            snprintf(r.title, sizeof r.title, "%s", SHORT_SAMPLE[i].title);
-            snprintf(r.views, sizeof r.views, "%s", SHORT_SAMPLE[i].views);
-            r.is_short = 1;
-            yt_feed_add(&pg->shorts, &r);
-        }
-    pg->videos.continuation = strdup("more");
-    pg->started = 3;
+    memset(&r, 0, sizeof r);
+    snprintf(r.video_id, sizeof r.video_id, "t%d_%d", i, k);
+    snprintf(r.title, sizeof r.title, "%s", SAMPLE[i].title);
+    snprintf(r.channel, sizeof r.channel, "%s", SAMPLE[i].channel);
+    snprintf(r.duration, sizeof r.duration, "%s", SAMPLE[i].duration);
+    snprintf(r.views, sizeof r.views, "%s", SAMPLE[i].views);
+    snprintf(r.published, sizeof r.published, "%s", SAMPLE[i].published);
+    yt_feed_add(f, &r);
+}
+
+static void add_short(yt_feed *f, int i, int k, int shelf)
+{
+    yt_search_result r;
+    memset(&r, 0, sizeof r);
+    snprintf(r.video_id, sizeof r.video_id, "s%d_%d", i, k);
+    snprintf(r.title, sizeof r.title, "%s", SHORT_SAMPLE[i].title);
+    snprintf(r.views, sizeof r.views, "%s", SHORT_SAMPLE[i].views);
+    r.is_short = 1;
+    r.shelf = shelf;
+    yt_feed_add(f, &r);
+}
+
+/* Sample list shaped like a real YouTube search page: a Shorts shelf, three videos, a big
+ * Shorts shelf, then videos (repeat = how many rounds of the 12 sample videos). */
+static void fill_page(browse_page *pg, int repeat)
+{
+    yt_feed *f = &pg->feed;
+    int i, k;
+    f->nshelves = 2;
+    for (i = 0; i < 5; i++)
+        add_short(f, i, 0, 1);
+    for (i = 0; i < 3; i++)
+        add_video(f, i, 0);
+    for (i = 0; i < NSHORT; i++)
+        add_short(f, i, 1, 2);
+    for (i = 3; i < NSAMPLE; i++)
+        add_video(f, i, 0);
+    for (k = 1; k < repeat; k++)
+        for (i = 0; i < NSAMPLE; i++)
+            add_video(f, i, k);
+    f->continuation = strdup("more");
+    pg->started = 1;
 }
 
 static void frames(browse_state *b, ui_input *in, int n)
@@ -208,21 +226,25 @@ int main(int argc, char **argv)
         const int W = widths[wi];
         memset(&in, 0, sizeof in);
 
-        /* Home: topic chip results with the Shorts shelf, second card selected. */
+        /* Home ("For you" chip first), a video selected. */
         soft_begin(W);
         browse_init(&b, logo);
-        b.pages[PAGE_HOME].chip = 1;
-        b.chip_sel = 1;
-        fill_page(&b.pages[PAGE_HOME], 3, 1);
-        b.pages[PAGE_HOME].col = 1;
+        b.has_for_you = 1;
+        fill_page(&b.pages[PAGE_HOME], 3);
         frames(&b, &in, 2);
+        in.pressed = UI_DOWN; /* from the first shelf to the videos */
+        frames(&b, &in, 1);
+        in.pressed = UI_RIGHT;
+        frames(&b, &in, 1);
+        in.pressed = 0;
+        frames(&b, &in, 30);
         soft_begin(W);
         browse_draw(&b, get_thumb, NULL);
         save(out, "home", W);
 
-        /* Down to the Shorts shelf with the D-pad, then the pointer on the scrollbar. */
+        /* Down to the second Shorts shelf, then the pointer on the scrollbar. */
         in.pressed = UI_DOWN;
-        frames(&b, &in, 2);
+        frames(&b, &in, 1);
         in.pressed = UI_RIGHT;
         frames(&b, &in, 3);
         in.pressed = 0;
@@ -237,35 +259,24 @@ int main(int argc, char **argv)
         ui_cursor(in.px, in.py);
         save(out, "home-shelf", W);
 
-        /* Further down: more rows loaded, footer spinner while the next page comes. */
+        /* Further down: footer spinner while the next page comes. */
         memset(&in, 0, sizeof in);
         in.pressed = UI_DOWN;
-        for (i = 0; i < 6; i++)
+        for (i = 0; i < 8; i++)
             frames(&b, &in, 1);
-        b.pages[PAGE_HOME].loading_videos = 1;
+        b.pages[PAGE_HOME].loading = 1;
         in.pressed = 0;
         frames(&b, &in, 30);
         soft_begin(W);
         browse_draw(&b, get_thumb, NULL);
         save(out, "home-more", W);
 
-        /* Shorts page. */
-        browse_set_page(&b, PAGE_SHORTS);
-        fill_page(&b.pages[PAGE_SHORTS], 0, 1);
-        b.pages[PAGE_SHORTS].shorts.continuation = strdup("more");
-        b.pages[PAGE_SHORTS].col = 2;
-        b.focus = FOCUS_GRID;
-        frames(&b, &in, 2);
-        soft_begin(W);
-        browse_draw(&b, get_thumb, NULL);
-        save(out, "shorts", W);
-
-        /* Search results, the rail focused. */
+        /* Search results, the rail's Shorts button focused. */
         browse_set_page(&b, PAGE_SEARCH);
         snprintf(b.pages[PAGE_SEARCH].query, sizeof b.pages[PAGE_SEARCH].query, "wii sports");
-        fill_page(&b.pages[PAGE_SEARCH], 1, 1);
+        fill_page(&b.pages[PAGE_SEARCH], 1);
         b.focus = FOCUS_RAIL;
-        b.rail_sel = PAGE_SEARCH;
+        b.rail_sel = RAIL_SHORTS;
         frames(&b, &in, 2);
         soft_begin(W);
         browse_draw(&b, get_thumb, NULL);
@@ -283,8 +294,8 @@ int main(int argc, char **argv)
         /* First page loading. */
         browse_set_page(&b, PAGE_HOME);
         browse_reset_page(&b, PAGE_HOME);
-        b.pages[PAGE_HOME].loading_videos = 1;
-        b.pages[PAGE_HOME].started = 3;
+        b.pages[PAGE_HOME].loading = 1;
+        b.pages[PAGE_HOME].started = 1;
         b.frame = 12;
         soft_begin(W);
         browse_draw(&b, get_thumb, NULL);

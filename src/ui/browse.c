@@ -1,14 +1,15 @@
-/* Browse screens: Home (topic chips, videos and a Shorts shelf), Shorts (a grid of Shorts)
- * and search results. A left rail switches pages; a scrollbar on the right can be dragged
- * with the Wii Remote pointer. Lists grow as you scroll (the app loads the next page when
- * browse_update sets want_videos / want_shorts). */
+/* Browse screens: Home (chips: For you = YouTube's recommendations, then topics) and search
+ * results, both in YouTube's order with Shorts shelves where YouTube puts them. A left rail
+ * has Home, Shorts (opens the Shorts player) and Search; a scrollbar on the right can be
+ * dragged with the Wii Remote pointer. Lists grow as you scroll (the app loads the next
+ * page when browse_update sets want_more). */
 #include "ui.h"
 
 #include <stdio.h>
 #include <string.h>
 
-const char *const ui_chips[UI_NUM_CHIPS] = {
-    "Gaming", "Wii", "Super Mario", "Mario Kart", "Music", "Minecraft", "Game design", "Podcasts",
+const char *const ui_topics[UI_NUM_TOPICS] = {
+    "Gaming", "Music", "Wii", "Mario Kart", "Minecraft", "Comedy", "Sports", "Podcasts",
 };
 
 /* ---- layout ------------------------------------------------------------------------ */
@@ -24,7 +25,6 @@ const char *const ui_chips[UI_NUM_CHIPS] = {
 #define THUMB_R     8
 #define SB_HIT      26   /* scrollbar: width of the area that reacts to the pointer */
 #define SHELF_HEAD  34
-#define SHELF_AFTER 2    /* rows of videos above the Shorts shelf */
 #define FOOTER_H    64
 #define MAX_ROWS    400
 
@@ -75,73 +75,53 @@ static float short_w(void)
 static float short_th(void) { return (float)(int)(short_w() * 16 / 9); }
 static float short_h(void) { return short_th() + 8 + 2 * ui_line_height(FONT_TITLE) + ui_line_height(FONT_META); }
 
-enum { ROW_VIDEOS, ROW_SHELF, ROW_SHORTS, ROW_FOOTER };
+enum { ROW_VIDEOS, ROW_SHELF, ROW_FOOTER };
 
 typedef struct {
-    int type, first, count;
-    float y, h; /* in content coordinates (0 = top of the list) */
+    int type, first, count; /* entries first .. first+count-1 of the list */
+    int shelf;              /* ROW_SHELF: shelf number */
+    float y, h;             /* in content coordinates (0 = top of the list) */
 } row_t;
 
 static row_t g_rows[MAX_ROWS];
 
-static int has_shelf_page(int page) { return page != PAGE_SHORTS; }
-
-/* The page as rows: videos in rows of video_cols() with the Shorts shelf after SHELF_AFTER
- * rows (Home, Search), or Shorts in rows of short_cols(); a footer while more can load. */
-static int layout(const browse_state *b, const browse_page *pg, float *total)
+/* The page as rows, in list order: runs of videos in rows of video_cols(), each Shorts
+ * shelf as one horizontal row; a footer while more can load. */
+static int layout(const browse_page *pg, float *total)
 {
-    int n = 0, i;
+    const yt_feed *f = &pg->feed;
+    const int c = video_cols();
+    int n = 0, i = 0;
     float y = 0;
-    if (!has_shelf_page(b->page)) {
-        const int c = short_cols();
-        for (i = 0; i < pg->shorts.nshorts && n < MAX_ROWS - 1; i += c, n++) {
-            g_rows[n].type = ROW_SHORTS;
-            g_rows[n].first = i;
-            g_rows[n].count = pg->shorts.nshorts - i < c ? pg->shorts.nshorts - i : c;
-            g_rows[n].y = y;
-            g_rows[n].h = short_h() + GAP_Y;
-            y += g_rows[n].h;
+    while (i < f->n && n < MAX_ROWS - 1) {
+        row_t *r = &g_rows[n++];
+        int k = i;
+        r->y = y;
+        if (f->items[i].shelf > 0) {
+            while (k < f->n && f->items[k].shelf == f->items[i].shelf)
+                k++;
+            r->type = ROW_SHELF;
+            r->shelf = f->items[i].shelf;
+            r->h = SHELF_HEAD + short_h() + GAP_Y;
+        } else {
+            while (k < f->n && k - i < c && f->items[k].shelf == 0)
+                k++;
+            r->type = ROW_VIDEOS;
+            r->shelf = 0;
+            r->h = card_h() + GAP_Y;
         }
-        if (pg->shorts.nshorts > 0 && (pg->loading_shorts || pg->shorts.continuation || pg->failed)) {
-            g_rows[n].type = ROW_FOOTER;
-            g_rows[n].first = g_rows[n].count = 0;
-            g_rows[n].y = y;
-            g_rows[n].h = FOOTER_H;
-            y += FOOTER_H;
-            n++;
-        }
-    } else {
-        const int c = video_cols(), vrows = (pg->videos.n + c - 1) / c;
-        const int shelf_at = pg->shorts.nshorts > 0 ? (vrows < SHELF_AFTER ? vrows : SHELF_AFTER) : -1;
-        int r;
-        for (r = 0; r <= vrows && n < MAX_ROWS - 2; r++) {
-            if (r == shelf_at) {
-                g_rows[n].type = ROW_SHELF;
-                g_rows[n].first = 0;
-                g_rows[n].count = pg->shorts.nshorts;
-                g_rows[n].y = y;
-                g_rows[n].h = SHELF_HEAD + short_h() + GAP_Y;
-                y += g_rows[n].h;
-                n++;
-            }
-            if (r < vrows) {
-                g_rows[n].type = ROW_VIDEOS;
-                g_rows[n].first = r * c;
-                g_rows[n].count = pg->videos.n - r * c < c ? pg->videos.n - r * c : c;
-                g_rows[n].y = y;
-                g_rows[n].h = card_h() + GAP_Y;
-                y += g_rows[n].h;
-                n++;
-            }
-        }
-        if (pg->videos.n > 0 && (pg->loading_videos || pg->videos.continuation || pg->failed)) {
-            g_rows[n].type = ROW_FOOTER;
-            g_rows[n].first = g_rows[n].count = 0;
-            g_rows[n].y = y;
-            g_rows[n].h = FOOTER_H;
-            y += FOOTER_H;
-            n++;
-        }
+        r->first = i;
+        r->count = k - i;
+        y += r->h;
+        i = k;
+    }
+    if (f->n > 0 && (pg->loading || f->continuation || pg->failed)) {
+        row_t *r = &g_rows[n++];
+        r->type = ROW_FOOTER;
+        r->first = r->count = r->shelf = 0;
+        r->y = y;
+        r->h = FOOTER_H;
+        y += FOOTER_H;
     }
     *total = y;
     return n;
@@ -159,28 +139,25 @@ static int last_row(int n)
     return n > 0 && g_rows[n - 1].type == ROW_FOOTER ? n - 2 : n - 1;
 }
 
+static int slot(int shelf) { return shelf % UI_SHELF_SLOTS; }
+
 static box video_box(const browse_page *pg, const row_t *r, int col)
 {
     return mkbox(content_x() + col * (card_w() + GAP_X), GRID_Y + r->y - pg->scroll, card_w(), card_h());
 }
 
-static box short_box(const browse_page *pg, const row_t *r, int col)
-{
-    return mkbox(content_x() + col * (short_w() + GAP_S), GRID_Y + r->y - pg->scroll, short_w(), short_h());
-}
-
-/* Short number i of the shelf (horizontal list). */
+/* Short number i (0 = first of the shelf) in a shelf row. */
 static box shelf_box(const browse_page *pg, const row_t *r, int i)
 {
-    return mkbox(content_x() + (i - pg->shelf_scroll) * (short_w() + GAP_S), GRID_Y + r->y + SHELF_HEAD - pg->scroll,
-                 short_w(), short_h());
+    return mkbox(content_x() + (i - pg->shelf_scroll[slot(r->shelf)]) * (short_w() + GAP_S),
+                 GRID_Y + r->y + SHELF_HEAD - pg->scroll, short_w(), short_h());
 }
 
-static int shelf_can_left(const browse_page *pg) { return pg->shelf_to > 0.01f; }
+static int shelf_can_left(const browse_page *pg, const row_t *r) { return pg->shelf_to[slot(r->shelf)] > 0.01f; }
 
-static int shelf_can_right(const browse_page *pg)
+static int shelf_can_right(const browse_page *pg, const row_t *r)
 {
-    return pg->shelf_to + short_cols() < pg->shorts.nshorts;
+    return pg->shelf_to[slot(r->shelf)] + short_cols() < r->count;
 }
 
 static box shelf_arrow(const browse_page *pg, const row_t *r, int right)
@@ -218,7 +195,27 @@ static box quality_box(const browse_state *bs)
 
 static box rail_box(int i) { return mkbox(6, GRID_Y - 40 + i * 70, RAIL_W - 12, 62); }
 
-static float chip_w(int i) { return ui_text_width(FONT_TITLE, ui_chips[i]) + 24; }
+/* ---- chips (Home) ---- */
+
+static int chip_count(const browse_state *b) { return UI_NUM_TOPICS + (b->has_for_you ? 1 : 0); }
+
+const char *browse_chip_topic(const browse_state *b, int i)
+{
+    if (b->has_for_you) {
+        if (i == 0)
+            return NULL;
+        i--;
+    }
+    return ui_topics[i >= 0 && i < UI_NUM_TOPICS ? i : 0];
+}
+
+static const char *chip_label(const browse_state *b, int i)
+{
+    const char *t = browse_chip_topic(b, i);
+    return t ? t : "For you";
+}
+
+static float chip_w(const browse_state *b, int i) { return ui_text_width(FONT_TITLE, chip_label(b, i)) + 24; }
 
 static box chip_box(const browse_state *bs, int i)
 {
@@ -226,14 +223,14 @@ static box chip_box(const browse_state *bs, int i)
     int k;
     b.x = content_x() - bs->chip_scroll;
     for (k = 0; k < i; k++)
-        b.x += chip_w(k) + 10;
+        b.x += chip_w(bs, k) + 10;
     b.y = CHIP_Y;
-    b.w = chip_w(i);
+    b.w = chip_w(bs, i);
     b.h = CHIP_H;
     return b;
 }
 
-static int has_chips(int page) { return page != PAGE_SEARCH; }
+static int has_chips(int page) { return page == PAGE_HOME; }
 
 /* Scrollbar track and thumb. */
 static void scrollbar(const browse_page *pg, float total, box *track, box *thumb)
@@ -269,8 +266,7 @@ void browse_reset_page(browse_state *b, int page)
     const int chip = pg->chip, gen = pg->gen;
     char query[64];
     memcpy(query, pg->query, sizeof query);
-    yt_feed_free(&pg->videos);
-    yt_feed_free(&pg->shorts);
+    yt_feed_free(&pg->feed);
     memset(pg, 0, sizeof *pg);
     pg->chip = chip;
     pg->gen = gen + 1;
@@ -280,7 +276,7 @@ void browse_reset_page(browse_state *b, int page)
 void browse_set_page(browse_state *b, int page)
 {
     b->page = page;
-    b->rail_sel = page;
+    b->rail_sel = page == PAGE_SEARCH ? RAIL_SEARCH : RAIL_HOME;
     b->chip_sel = b->pages[page].chip;
     b->chip_scroll = 0;
     b->dragging = 0;
@@ -300,26 +296,25 @@ static void scroll_to_row(browse_page *pg, int row, float total)
     pg->scroll_to = s < 0 ? 0 : s;
 }
 
-static void shelf_follow(browse_page *pg)
+/* Scroll a shelf so that its Short number col is visible. */
+static void shelf_follow(browse_page *pg, const row_t *r, int col)
 {
-    const int vis = short_cols();
-    if (pg->shelf_sel < pg->shelf_to)
-        pg->shelf_to = (float)pg->shelf_sel;
-    if (pg->shelf_sel >= pg->shelf_to + vis)
-        pg->shelf_to = (float)(pg->shelf_sel - vis + 1);
+    const int vis = short_cols(), s = slot(r->shelf);
+    if (col < pg->shelf_to[s])
+        pg->shelf_to[s] = (float)col;
+    if (col >= pg->shelf_to[s] + vis)
+        pg->shelf_to[s] = (float)(col - vis + 1);
 }
 
-static void shelf_page(browse_page *pg, int dir)
+static void shelf_page(browse_page *pg, const row_t *r, int dir)
 {
-    const int vis = short_cols();
-    float t = pg->shelf_to + dir * (vis - 1);
-    if (t > pg->shorts.nshorts - vis)
-        t = (float)(pg->shorts.nshorts - vis);
+    const int vis = short_cols(), s = slot(r->shelf);
+    float t = pg->shelf_to[s] + dir * (vis - 1);
+    if (t > r->count - vis)
+        t = (float)(r->count - vis);
     if (t < 0)
         t = 0;
-    pg->shelf_to = (float)(int)t;
-    if (pg->shelf_sel < pg->shelf_to || pg->shelf_sel >= pg->shelf_to + vis)
-        pg->shelf_sel = (int)pg->shelf_to;
+    pg->shelf_to[s] = (float)(int)t;
 }
 
 static void keep_chip_visible(browse_state *b)
@@ -334,8 +329,8 @@ static void keep_chip_visible(browse_state *b)
 
 /* What the pointer is on. */
 enum {
-    HIT_NONE, HIT_LOGO, HIT_SEARCH, HIT_QUALITY, HIT_RAIL, HIT_CHIP, HIT_CARD, HIT_SHELF, HIT_SHELF_LEFT,
-    HIT_SHELF_RIGHT, HIT_SB_THUMB, HIT_SB_TRACK, HIT_CONTENT,
+    HIT_NONE, HIT_LOGO, HIT_SEARCH, HIT_QUALITY, HIT_RAIL, HIT_CHIP, HIT_CARD, HIT_SHELF_LEFT, HIT_SHELF_RIGHT,
+    HIT_SB_THUMB, HIT_SB_TRACK, HIT_CONTENT,
 };
 
 typedef struct {
@@ -364,7 +359,7 @@ static hit_t hit_test(const browse_state *b, const browse_page *pg, int nrows, f
         return h;
     }
     if (x < RAIL_W) {
-        for (i = 0; i < PAGE_COUNT; i++) {
+        for (i = 0; i < RAIL_COUNT; i++) {
             bx = rail_box(i);
             if (inside(&bx, x, y)) {
                 h.kind = HIT_RAIL;
@@ -374,7 +369,7 @@ static hit_t hit_test(const browse_state *b, const browse_page *pg, int nrows, f
         return h;
     }
     if (has_chips(b->page) && y >= CHIP_Y && y < CHIP_Y + CHIP_H) {
-        for (i = 0; i < UI_NUM_CHIPS; i++) {
+        for (i = 0; i < chip_count(b); i++) {
             bx = chip_box(b, i);
             if (inside(&bx, x, y) && x >= content_x() - 4) {
                 h.kind = HIT_CHIP;
@@ -396,9 +391,9 @@ static hit_t hit_test(const browse_state *b, const browse_page *pg, int nrows, f
         const float top = GRID_Y + row->y - pg->scroll;
         if (y < top || y >= top + row->h)
             continue;
-        if (row->type == ROW_VIDEOS || row->type == ROW_SHORTS) {
+        if (row->type == ROW_VIDEOS) {
             for (i = 0; i < row->count; i++) {
-                bx = row->type == ROW_VIDEOS ? video_box(pg, row, i) : short_box(pg, row, i);
+                bx = video_box(pg, row, i);
                 if (inside(&bx, x, y)) {
                     h.kind = HIT_CARD;
                     h.row = r;
@@ -406,24 +401,25 @@ static hit_t hit_test(const browse_state *b, const browse_page *pg, int nrows, f
                 }
             }
         } else if (row->type == ROW_SHELF) {
+            const int first = (int)pg->shelf_scroll[slot(row->shelf)];
             bx = shelf_arrow(pg, row, 0);
-            if (shelf_can_left(pg) && inside(&bx, x, y)) {
+            if (shelf_can_left(pg, row) && inside(&bx, x, y)) {
                 h.kind = HIT_SHELF_LEFT;
                 h.row = r;
                 return h;
             }
             bx = shelf_arrow(pg, row, 1);
-            if (shelf_can_right(pg) && inside(&bx, x, y)) {
+            if (shelf_can_right(pg, row) && inside(&bx, x, y)) {
                 h.kind = HIT_SHELF_RIGHT;
                 h.row = r;
                 return h;
             }
-            for (i = (int)pg->shelf_scroll; i < row->count && i <= (int)pg->shelf_scroll + short_cols(); i++) {
+            for (i = first; i < row->count && i <= first + short_cols(); i++) {
                 bx = shelf_box(pg, row, i);
                 if (inside(&bx, x, y) && bx.x >= content_x() - 1 && bx.x + bx.w <= content_x() + content_w() + 1) {
-                    h.kind = HIT_SHELF;
+                    h.kind = HIT_CARD;
                     h.row = r;
-                    h.index = i;
+                    h.col = i;
                 }
             }
         }
@@ -444,34 +440,26 @@ static int play_selected(browse_state *b, browse_page *pg, int nrows)
     if (pg->row < 0 || pg->row >= nrows)
         return ACT_NONE;
     r = &g_rows[pg->row];
-    if (r->type == ROW_VIDEOS) {
-        b->play_feed = &pg->videos;
-        b->play_index = r->first + pg->col;
-        b->play_short = 0;
-    } else if (r->type == ROW_SHORTS) {
-        b->play_feed = &pg->shorts;
-        b->play_index = r->first + pg->col;
-        b->play_short = 1;
-    } else if (r->type == ROW_SHELF) {
-        b->play_feed = &pg->shorts;
-        b->play_index = pg->shelf_sel;
-        b->play_short = 1;
-    } else {
+    if (r->type == ROW_FOOTER || pg->col < 0 || pg->col >= r->count)
         return ACT_NONE;
-    }
+    b->play_feed = &pg->feed;
+    b->play_index = r->first + pg->col;
     return ACT_PLAY;
 }
 
-static int go_page(browse_state *b, int page)
+static int go_rail(browse_state *b, int item)
 {
-    if (page == PAGE_SEARCH)
+    if (item == RAIL_SEARCH)
         return ACT_OPEN_KEYBOARD;
-    if (page == b->page) { /* already there: back to the top */
-        b->pages[page].scroll_to = 0;
-        b->pages[page].row = b->pages[page].col = 0;
+    if (item == RAIL_SHORTS)
+        return ACT_SHORTS;
+    if (b->page == PAGE_HOME) { /* already there: back to the top */
+        b->pages[PAGE_HOME].scroll_to = 0;
+        b->pages[PAGE_HOME].row = b->pages[PAGE_HOME].col = 0;
+        b->focus = FOCUS_GRID;
         return ACT_NONE;
     }
-    browse_set_page(b, page);
+    browse_set_page(b, PAGE_HOME);
     b->focus = FOCUS_GRID;
     return ACT_PAGE;
 }
@@ -480,31 +468,26 @@ static int pick_chip(browse_state *b, int chip)
 {
     browse_page *pg = &b->pages[b->page];
     b->chip_sel = chip;
-    if (pg->chip == chip && pg->started)
-        return ACT_NONE;
+    if (pg->chip == chip && pg->started && browse_chip_topic(b, chip))
+        return ACT_NONE; /* (For you is refreshed every time it is picked) */
     pg->chip = chip;
     return ACT_CHIP;
 }
 
-void browse_select_short(browse_state *b, int i)
+void browse_select(browse_state *b, int i)
 {
     browse_page *pg = &b->pages[b->page];
     float total;
-    int n = layout(b, pg, &total), r;
-    if (i < 0 || i >= pg->shorts.nshorts)
-        return;
+    int n = layout(pg, &total), r;
     for (r = 0; r < n; r++) {
         const row_t *row = &g_rows[r];
-        if (row->type == ROW_SHELF) {
-            pg->row = r;
-            pg->shelf_sel = i;
-            shelf_follow(pg);
-            pg->shelf_scroll = pg->shelf_to;
-        } else if (row->type == ROW_SHORTS && i >= row->first && i < row->first + row->count) {
-            pg->row = r;
-            pg->col = i - row->first;
-        } else {
+        if (row->type == ROW_FOOTER || i < row->first || i >= row->first + row->count)
             continue;
+        pg->row = r;
+        pg->col = i - row->first;
+        if (row->type == ROW_SHELF) {
+            shelf_follow(pg, row, pg->col);
+            pg->shelf_scroll[slot(row->shelf)] = pg->shelf_to[slot(row->shelf)];
         }
         b->focus = FOCUS_GRID;
         scroll_to_row(pg, r, total);
@@ -513,7 +496,7 @@ void browse_select_short(browse_state *b, int i)
     }
 }
 
-/* Column in a row of `to_cols` that lines up with column `col` of a row of `from_cols`. */
+/* Column in a row of to_cols that lines up with column col of a row of from_cols. */
 static int map_col(int col, int from_cols, int to_cols)
 {
     return (col * to_cols + from_cols / 2) / from_cols;
@@ -522,7 +505,7 @@ static int map_col(int col, int from_cols, int to_cols)
 static void grid_keys(browse_state *b, browse_page *pg, unsigned k, int nrows, float total)
 {
     const int last = last_row(nrows);
-    row_t *r;
+    const row_t *r;
     if (last < 0) {
         if (k & UI_UP)
             b->focus = has_chips(b->page) ? FOCUS_CHIPS : FOCUS_TOP;
@@ -532,28 +515,27 @@ static void grid_keys(browse_state *b, browse_page *pg, unsigned k, int nrows, f
     }
     if (pg->row > last)
         pg->row = last;
+    if (pg->row < 0)
+        pg->row = 0;
     r = &g_rows[pg->row];
-    if (r->type != ROW_SHELF && pg->col >= r->count)
+    if (pg->col >= r->count)
         pg->col = r->count - 1;
+    if (pg->col < 0)
+        pg->col = 0;
 
-    if (k & UI_RIGHT) {
-        if (r->type == ROW_SHELF) {
-            if (pg->shelf_sel + 1 < pg->shorts.nshorts)
-                pg->shelf_sel++;
-            shelf_follow(pg);
-        } else if (pg->col + 1 < r->count) {
-            pg->col++;
-        }
+    if (k & UI_RIGHT && pg->col + 1 < r->count) {
+        pg->col++;
+        if (r->type == ROW_SHELF)
+            shelf_follow(pg, r, pg->col);
     }
     if (k & UI_LEFT) {
-        if (r->type == ROW_SHELF && pg->shelf_sel > 0) {
-            pg->shelf_sel--;
-            shelf_follow(pg);
-        } else if (r->type != ROW_SHELF && pg->col > 0) {
+        if (pg->col > 0) {
             pg->col--;
+            if (r->type == ROW_SHELF)
+                shelf_follow(pg, r, pg->col);
         } else {
             b->focus = FOCUS_RAIL;
-            b->rail_sel = b->page;
+            b->rail_sel = b->page == PAGE_SEARCH ? RAIL_SEARCH : RAIL_HOME;
             return;
         }
     }
@@ -567,19 +549,24 @@ static void grid_keys(browse_state *b, browse_page *pg, unsigned k, int nrows, f
         }
         if (to <= last) {
             const row_t *nr = &g_rows[to];
-            const int cols_from = r->type == ROW_VIDEOS ? video_cols() : short_cols();
-            if (r->type == ROW_SHELF && nr->type != ROW_SHELF)
-                pg->col = map_col(pg->shelf_sel - (int)(pg->shelf_to + 0.5f), short_cols(), video_cols());
-            else if (r->type != ROW_SHELF && nr->type == ROW_SHELF) {
-                pg->shelf_sel = (int)(pg->shelf_to + 0.5f) + map_col(pg->col, cols_from, short_cols());
-                if (pg->shelf_sel >= pg->shorts.nshorts)
-                    pg->shelf_sel = pg->shorts.nshorts - 1;
+            /* Keep the same horizontal position between grid rows and shelves. */
+            int vis_col = pg->col, from_cols = video_cols(), to_cols = video_cols();
+            if (r->type == ROW_SHELF) {
+                vis_col -= (int)(pg->shelf_to[slot(r->shelf)] + 0.5f);
+                from_cols = short_cols();
             }
+            if (nr->type == ROW_SHELF)
+                to_cols = short_cols();
+            pg->col = map_col(vis_col, from_cols, to_cols);
+            if (nr->type == ROW_SHELF)
+                pg->col += (int)(pg->shelf_to[slot(nr->shelf)] + 0.5f);
             pg->row = to;
-            if (nr->type != ROW_SHELF && pg->col >= nr->count)
+            if (pg->col >= nr->count)
                 pg->col = nr->count - 1;
             if (pg->col < 0)
                 pg->col = 0;
+            if (nr->type == ROW_SHELF)
+                shelf_follow(pg, nr, pg->col);
         }
     }
     if (k & UI_DIRS)
@@ -591,13 +578,13 @@ int browse_update(browse_state *b, const ui_input *in)
     browse_page *pg = &b->pages[b->page];
     const unsigned k = in->pressed;
     float total, ms;
-    int nrows, act = ACT_NONE;
+    int nrows, i;
     hit_t h;
 
     b->frame++;
-    b->want_videos = b->want_shorts = 0;
+    b->want_more = 0;
     b->play_feed = NULL;
-    nrows = layout(b, pg, &total);
+    nrows = layout(pg, &total);
     ms = max_scroll(total);
     memset(&h, 0, sizeof h);
 
@@ -627,7 +614,6 @@ int browse_update(browse_state *b, const ui_input *in)
         case HIT_RAIL: b->focus = FOCUS_RAIL; b->rail_sel = h.index; break;
         case HIT_CHIP: b->focus = FOCUS_CHIPS; b->chip_sel = h.index; break;
         case HIT_CARD: b->focus = FOCUS_GRID; pg->row = h.row; pg->col = h.col; break;
-        case HIT_SHELF: b->focus = FOCUS_GRID; pg->row = h.row; pg->shelf_sel = h.index; break;
         default: break;
         }
     }
@@ -641,7 +627,7 @@ int browse_update(browse_state *b, const ui_input *in)
         return cycle_quality(b);
     if (k & UI_B) {
         if (b->page != PAGE_HOME)
-            return go_page(b, PAGE_HOME);
+            return go_rail(b, RAIL_HOME);
         pg->scroll_to = 0;
         pg->row = pg->col = 0;
         b->focus = FOCUS_GRID;
@@ -649,21 +635,17 @@ int browse_update(browse_state *b, const ui_input *in)
     if (k & UI_A) {
         if (in->pointer) {
             switch (h.kind) {
-            case HIT_LOGO: return go_page(b, PAGE_HOME);
+            case HIT_LOGO: return go_rail(b, RAIL_HOME);
             case HIT_SEARCH: return ACT_OPEN_KEYBOARD;
             case HIT_QUALITY: return cycle_quality(b);
-            case HIT_RAIL: return go_page(b, h.index);
+            case HIT_RAIL: return go_rail(b, h.index);
             case HIT_CHIP: return pick_chip(b, h.index);
             case HIT_CARD:
                 pg->row = h.row;
                 pg->col = h.col;
                 return play_selected(b, pg, nrows);
-            case HIT_SHELF:
-                pg->row = h.row;
-                pg->shelf_sel = h.index;
-                return play_selected(b, pg, nrows);
-            case HIT_SHELF_LEFT: shelf_page(pg, -1); break;
-            case HIT_SHELF_RIGHT: shelf_page(pg, 1); break;
+            case HIT_SHELF_LEFT: shelf_page(pg, &g_rows[h.row], -1); break;
+            case HIT_SHELF_RIGHT: shelf_page(pg, &g_rows[h.row], 1); break;
             case HIT_SB_THUMB: {
                 box track, thumb;
                 scrollbar(pg, total, &track, &thumb);
@@ -689,11 +671,11 @@ int browse_update(browse_state *b, const ui_input *in)
             switch (b->focus) {
             case FOCUS_TOP:
                 if (b->top_sel == TOP_LOGO)
-                    return go_page(b, PAGE_HOME);
+                    return go_rail(b, RAIL_HOME);
                 if (b->top_sel == TOP_QUALITY)
                     return cycle_quality(b);
                 return ACT_OPEN_KEYBOARD;
-            case FOCUS_RAIL: return go_page(b, b->rail_sel);
+            case FOCUS_RAIL: return go_rail(b, b->rail_sel);
             case FOCUS_CHIPS: return pick_chip(b, b->chip_sel);
             case FOCUS_GRID:
                 if (pg->failed && last_row(nrows) < 0) {
@@ -725,7 +707,7 @@ int browse_update(browse_state *b, const ui_input *in)
                 b->top_sel = TOP_LOGO;
             }
         }
-        if (k & UI_DOWN && b->rail_sel < PAGE_COUNT - 1)
+        if (k & UI_DOWN && b->rail_sel < RAIL_COUNT - 1)
             b->rail_sel++;
         if (k & UI_RIGHT)
             b->focus = FOCUS_GRID;
@@ -736,10 +718,10 @@ int browse_update(browse_state *b, const ui_input *in)
                 b->chip_sel--;
             else {
                 b->focus = FOCUS_RAIL;
-                b->rail_sel = b->page;
+                b->rail_sel = RAIL_HOME;
             }
         }
-        if (k & UI_RIGHT && b->chip_sel < UI_NUM_CHIPS - 1)
+        if (k & UI_RIGHT && b->chip_sel < chip_count(b) - 1)
             b->chip_sel++;
         if (k & UI_UP) {
             b->focus = FOCUS_TOP;
@@ -755,7 +737,7 @@ int browse_update(browse_state *b, const ui_input *in)
         break;
     }
 
-    /* ---- scrolling: Nunchuk stick, then easing towards the target ---- */
+    /* ---- scrolling: Nunchuk stick, then easing towards the targets ---- */
     if (in->stick_y > 0.2f || in->stick_y < -0.2f)
         pg->scroll_to += in->stick_y * 16;
     if (pg->scroll_to > ms)
@@ -765,24 +747,17 @@ int browse_update(browse_state *b, const ui_input *in)
     pg->scroll += (pg->scroll_to - pg->scroll) * 0.35f;
     if (pg->scroll_to - pg->scroll < 0.5f && pg->scroll_to - pg->scroll > -0.5f)
         pg->scroll = pg->scroll_to;
-    pg->shelf_scroll += (pg->shelf_to - pg->shelf_scroll) * 0.35f;
-    if (pg->shelf_to - pg->shelf_scroll < 0.01f && pg->shelf_to - pg->shelf_scroll > -0.01f)
-        pg->shelf_scroll = pg->shelf_to;
+    for (i = 0; i < UI_SHELF_SLOTS; i++) {
+        pg->shelf_scroll[i] += (pg->shelf_to[i] - pg->shelf_scroll[i]) * 0.35f;
+        if (pg->shelf_to[i] - pg->shelf_scroll[i] < 0.01f && pg->shelf_to[i] - pg->shelf_scroll[i] > -0.01f)
+            pg->shelf_scroll[i] = pg->shelf_to[i];
+    }
 
     /* ---- what to load next ---- */
-    if (!pg->failed) {
-        const int near_end = pg->scroll_to + view_h() * 2.5f >= total;
-        if (has_shelf_page(b->page)) {
-            if (!(pg->started & 1) || (near_end && pg->videos.continuation && !pg->loading_videos))
-                b->want_videos = 1;
-            if (!(pg->started & 2) ||
-                (pg->shorts.continuation && !pg->loading_shorts && pg->shelf_to + 3 * short_cols() >= pg->shorts.nshorts))
-                b->want_shorts = 1;
-        } else if (!(pg->started & 2) || (near_end && pg->shorts.continuation && !pg->loading_shorts)) {
-            b->want_shorts = 1;
-        }
-    }
-    return act;
+    if (!pg->failed && !pg->loading &&
+        (!pg->started || (pg->feed.continuation && pg->scroll_to + view_h() * 2.5f >= total)))
+        b->want_more = 1;
+    return ACT_NONE;
 }
 
 /* ---- drawing ------------------------------------------------------------------------- */
@@ -830,10 +805,15 @@ static void draw_video_card(const yt_search_result *r, box c, int selected, ui_t
     } else {
         ui_round_rect(c.x, c.y, c.w, th, THUMB_R, C_CHIP);
     }
-    if (r->duration[0]) {
+    if (r->duration[0] && !r->is_short) {
         float dw = ui_text_width(FONT_META, r->duration) + 8;
         ui_round_rect(c.x + c.w - dw - 6, c.y + th - 22, dw, 17, 4, 0x000000cc);
         ui_text(FONT_META, c.x + c.w - dw - 2, c.y + th - 21, r->duration, C_TEXT, 0);
+    } else if (r->is_short) {
+        const float dw = ui_text_width(FONT_META, "SHORTS") + 22;
+        ui_round_rect(c.x + c.w - dw - 6, c.y + th - 22, dw, 17, 4, 0x000000cc);
+        ui_icon(ICON_SHORTS, c.x + c.w - dw - 4, c.y + th - 21, 14, 15, C_RED);
+        ui_text(FONT_META, c.x + c.w - dw + 12, c.y + th - 21, "SHORTS", C_TEXT, 0);
     }
     ui_ascii(channel, sizeof channel, r->channel);
     letter[0] = channel[0] ? channel[0] : '?';
@@ -903,27 +883,22 @@ static void draw_rows(const browse_state *b, const browse_page *pg, int nrows, u
         switch (row->type) {
         case ROW_VIDEOS:
             for (i = 0; i < row->count; i++)
-                draw_video_card(&pg->videos.items[row->first + i], video_box(pg, row, i),
-                                grid_focus && pg->row == r && pg->col == i, thumb, ud);
-            break;
-        case ROW_SHORTS:
-            for (i = 0; i < row->count; i++)
-                draw_short_card(&pg->shorts.shorts[row->first + i], short_box(pg, row, i),
+                draw_video_card(&pg->feed.items[row->first + i], video_box(pg, row, i),
                                 grid_focus && pg->row == r && pg->col == i, thumb, ud);
             break;
         case ROW_SHELF: {
             const float cx = content_x(), cw = content_w();
-            const int first = (int)pg->shelf_scroll;
+            const int first = (int)pg->shelf_scroll[slot(row->shelf)];
             ui_icon(ICON_SHORTS, cx, top + 4, 24, 24, C_RED);
             ui_text(FONT_HUGE, cx + 30, top + 2, "Shorts", C_TEXT, 0);
             dr_clip(cx - 4, GRID_Y - 6, cw + 8, UI_H - (GRID_Y - 6));
             for (i = first; i < row->count && i <= first + short_cols(); i++)
-                draw_short_card(&pg->shorts.shorts[i], shelf_box(pg, row, i),
-                                grid_focus && pg->row == r && pg->shelf_sel == i, thumb, ud);
-            if (shelf_can_left(pg))
-                draw_arrow_button(shelf_arrow(pg, row, 0), 0, hover->kind == HIT_SHELF_LEFT);
-            if (shelf_can_right(pg))
-                draw_arrow_button(shelf_arrow(pg, row, 1), 1, hover->kind == HIT_SHELF_RIGHT);
+                draw_short_card(&pg->feed.items[row->first + i], shelf_box(pg, row, i),
+                                grid_focus && pg->row == r && pg->col == i, thumb, ud);
+            if (shelf_can_left(pg, row))
+                draw_arrow_button(shelf_arrow(pg, row, 0), 0, hover->kind == HIT_SHELF_LEFT && hover->row == r);
+            if (shelf_can_right(pg, row))
+                draw_arrow_button(shelf_arrow(pg, row, 1), 1, hover->kind == HIT_SHELF_RIGHT && hover->row == r);
             dr_clip(0, GRID_Y - 6, ui_width(), UI_H - (GRID_Y - 6));
             break;
         }
@@ -945,6 +920,7 @@ static void draw_top_bar(const browse_state *b, const hit_t *hover)
     const int sfocus = (top && b->top_sel == TOP_SEARCH) || hover->kind == HIT_SEARCH;
     const float btn = 56;
     const char *query = b->pages[PAGE_SEARCH].query;
+    (void)hover;
     char label[32];
 
     if ((top && b->top_sel == TOP_LOGO) || hover->kind == HIT_LOGO)
@@ -974,12 +950,12 @@ static void draw_top_bar(const browse_state *b, const hit_t *hover)
 
 static void draw_rail(const browse_state *b, const hit_t *hover)
 {
-    static const char *const labels[PAGE_COUNT] = { "Home", "Shorts", "Search" };
-    static const int icons[PAGE_COUNT] = { ICON_HOME, ICON_SHORTS, ICON_SEARCH };
+    static const char *const labels[RAIL_COUNT] = { "Home", "Shorts", "Search" };
+    static const int icons[RAIL_COUNT] = { ICON_HOME, ICON_SHORTS, ICON_SEARCH };
     int i;
-    for (i = 0; i < PAGE_COUNT; i++) {
+    for (i = 0; i < RAIL_COUNT; i++) {
         const box r = rail_box(i);
-        const int current = b->page == i;
+        const int current = (i == RAIL_HOME && b->page == PAGE_HOME) || (i == RAIL_SEARCH && b->page == PAGE_SEARCH);
         const int focused = (b->focus == FOCUS_RAIL && b->rail_sel == i) || (hover->kind == HIT_RAIL && hover->index == i);
         const float lw = ui_text_width(FONT_META, labels[i]);
         if (focused)
@@ -995,7 +971,7 @@ static void draw_chips(const browse_state *b, const browse_page *pg, const hit_t
 {
     int i;
     dr_clip(content_x() - 4, CHIP_Y - 4, content_w() + 8, CHIP_H + 8);
-    for (i = 0; i < UI_NUM_CHIPS; i++) {
+    for (i = 0; i < chip_count(b); i++) {
         box c = chip_box(b, i);
         const int active = pg->chip == i;
         const int focused = (b->focus == FOCUS_CHIPS && b->chip_sel == i) || (hover->kind == HIT_CHIP && hover->index == i);
@@ -1004,7 +980,7 @@ static void draw_chips(const browse_state *b, const browse_page *pg, const hit_t
         if (focused)
             ui_round_rect(c.x - 2, c.y - 2, c.w + 4, c.h + 4, 10, C_FOCUS);
         ui_round_rect(c.x, c.y, c.w, c.h, 8, active ? C_CHIP_SEL : C_CHIP);
-        ui_text(FONT_TITLE, c.x + 12, c.y + 6, ui_chips[i], active ? 0x0f0f0fffu : C_TEXT, 0);
+        ui_text(FONT_TITLE, c.x + 12, c.y + 6, chip_label(b, i), active ? 0x0f0f0fffu : C_TEXT, 0);
     }
     dr_clip(0, 0, 0, 0);
 }
@@ -1026,7 +1002,7 @@ void browse_draw(browse_state *b, ui_thumb_fn thumb, void *ud)
 {
     browse_page *pg = &b->pages[b->page];
     float total;
-    int nrows = layout(b, pg, &total);
+    int nrows = layout(pg, &total);
     hit_t hover;
     memset(&hover, 0, sizeof hover);
     hover.kind = b->hover_kind;
@@ -1035,13 +1011,11 @@ void browse_draw(browse_state *b, ui_thumb_fn thumb, void *ud)
     dr_fill(0, 0, ui_width(), UI_H, C_BG);
     if (last_row(nrows) < 0) {
         const float cx = content_x() + content_w() / 2;
-        const int loading = (has_shelf_page(b->page) ? pg->loading_videos : pg->loading_shorts) ||
-                            (!pg->started && !pg->failed);
         char m[300];
-        if (loading) {
+        if (pg->loading || (!pg->started && !pg->failed)) {
             ui_spinner(cx, 250, 18, b->frame);
         } else {
-            const char *msg = pg->status[0] ? pg->status : pg->started ? "No videos here. Try another search." : "";
+            const char *msg = pg->status[0] ? pg->status : "No videos here. Try another search.";
             ui_ascii(m, sizeof m, msg);
             ui_text_wrap_center(FONT_BODY, cx, 236, m, C_TEXT2, content_w() - 40, 3);
             if (pg->failed)

@@ -267,10 +267,13 @@ static int feed_audio(session *s)
 
 /* ---- the player loop ------------------------------------------------------------------------ */
 
-enum { ST_OPENING, ST_PLAYING, ST_FAILED };
+enum { ST_OPENING, ST_PLAYING, ST_FAILED, ST_WAITING /* for the Shorts feed's first page */ };
 
 typedef struct {
     play_request *req;
+    int is_short;             /* vertical Shorts player */
+    yt_feed shorts;           /* Shorts: the queue (tapped Short, its shelf, then YouTube's feed) */
+    int shorts_fails;         /* Shorts feed pages in a row that brought nothing new */
     session *s;
     player_view pv;
     vqueue *q;
@@ -282,12 +285,69 @@ typedef struct {
     const yt_format *tracks[PV_MAX_AUDIO];
 } player;
 
+static const yt_feed *list(const player *p) { return p->is_short ? &p->shorts : p->req->feed; }
+
 static const yt_search_result *entry(const player *p, int i)
 {
-    const yt_feed *f = p->req->feed;
-    if (p->req->is_short)
-        return i >= 0 && i < f->nshorts ? &f->shorts[i] : NULL;
-    return i >= 0 && i < f->n ? &f->items[i] : NULL;
+    const yt_feed *f = list(p);
+    return f && i >= 0 && i < f->n ? &f->items[i] : NULL;
+}
+
+/* ---- the Shorts feed: YouTube's own sequence of Shorts, loaded in the background ---- */
+
+typedef struct {
+    job j;
+    char seed[16];      /* continue from this Short; "" = start from popular Shorts */
+    yt_feed result;
+    int rc;
+    char err[256];
+} reels_job;
+
+static reels_job g_reels;
+
+static void *reels_main(void *arg)
+{
+    reels_job *r = arg;
+    if (r->seed[0])
+        r->rc = yt_feed_start(&r->result, r->seed, YT_FEED_REELS, r->err, sizeof r->err);
+    else
+        r->rc = yt_feed_start(&r->result, "#shorts", YT_FEED_ALL, r->err, sizeof r->err);
+    r->j.done = 1;
+    return NULL;
+}
+
+static void reels_start(player *p, const char *seed)
+{
+    if (g_reels.j.thread || p->shorts_fails >= 3)
+        return;
+    memset(&g_reels, 0, sizeof g_reels);
+    snprintf(g_reels.seed, sizeof g_reels.seed, "%s", seed ? seed : "");
+    if (job_start(&g_reels.j, reels_main, &g_reels) != 0)
+        p->shorts_fails = 3;
+}
+
+/* Merge a finished page of Shorts into the queue; ask for more when nearing the end. */
+static void reels_tick(player *p)
+{
+    if (job_collect(&g_reels.j)) {
+        int i, before = p->shorts.n;
+        if (g_reels.rc < 0)
+            wlog("Shorts feed: %s", g_reels.err);
+        for (i = 0; i < g_reels.result.n; i++)
+            if (g_reels.result.items[i].is_short) {
+                yt_search_result r = g_reels.result.items[i];
+                r.shelf = 0;
+                yt_feed_add(&p->shorts, &r);
+            }
+        yt_feed_free(&g_reels.result);
+        p->shorts_fails = p->shorts.n > before ? 0 : p->shorts_fails + 1;
+        wlog("Shorts feed: +%d (now %d)", p->shorts.n - before, p->shorts.n);
+    }
+    if (p->is_short && p->shorts.n > 0 && p->index + 4 >= p->shorts.n) {
+        /* Continue from a recent Short; after a page with nothing new, from an earlier one. */
+        int k = p->shorts.n - 1 - p->shorts_fails * 2;
+        reels_start(p, p->shorts.items[k > 0 ? k : 0].video_id);
+    }
 }
 
 /* Stop decoding and downloading (the video info and seek indexes stay). */
@@ -363,18 +423,18 @@ static void open_entry(player *p, int i)
     close_session(p);
     p->index = p->loaded_index = i;
     snprintf(s->video_id, sizeof s->video_id, "%s", r->video_id);
-    s->quality = p->req->is_short ? p->short_quality : g_settings.quality;
+    s->quality = p->is_short ? p->short_quality : g_settings.quality;
     {
         player_view keep = p->pv;
         player_view_init(&p->pv);
         p->pv.volume = keep.volume;
-        p->pv.is_short = p->req->is_short;
+        p->pv.is_short = p->is_short;
     }
     snprintf(p->pv.title, sizeof p->pv.title, "%s", r->title);
     snprintf(p->pv.channel, sizeof p->pv.channel, "%s", r->channel);
     p->pv.quality = s->quality;
     p->pv.cc_on = 0;
-    p->pv.overlay_timer = p->req->is_short ? 120 : 240;
+    p->pv.overlay_timer = p->is_short ? 120 : 240;
     p->pending_seek = -1;
     begin_start(p, 1, 0);
 }
@@ -506,22 +566,48 @@ int player_run(play_request *req)
     p->req = req;
     p->s = &g_s;
     memset(&g_s, 0, sizeof g_s);
+    memset(&g_reels, 0, sizeof g_reels);
     p->short_quality = g_settings.quality < SHORTS_DEFAULT_MAX ? g_settings.quality : SHORTS_DEFAULT_MAX;
     player_view_init(&p->pv);
-    if (!entry(p, req->index))
-        return req->index;
-    open_entry(p, req->index);
+    if (!req->feed) {
+        /* Shorts tab: YouTube's Shorts feed, from the last Short watched or popular Shorts. */
+        p->is_short = 1;
+        p->pv.is_short = 1;
+        p->state = ST_WAITING;
+        p->pv.buffering = 1;
+        reels_start(p, req->shorts_from);
+    } else {
+        const yt_search_result *r = req->index >= 0 && req->index < req->feed->n ? &req->feed->items[req->index] : NULL;
+        if (!r)
+            return req->index;
+        p->is_short = r->is_short;
+        if (p->is_short) {
+            /* Like YouTube: the Short, the rest of its shelf, then the Shorts feed after it. */
+            int i;
+            yt_search_result first = *r;
+            first.shelf = 0;
+            yt_feed_add(&p->shorts, &first);
+            for (i = req->index + 1; r->shelf > 0 && i < req->feed->n && req->feed->items[i].shelf == r->shelf; i++) {
+                yt_search_result e = req->feed->items[i];
+                e.shelf = 0;
+                yt_feed_add(&p->shorts, &e);
+            }
+            reels_start(p, r->video_id);
+            open_entry(p, 0);
+        } else {
+            open_entry(p, req->index);
+        }
+    }
 
     while (!g_quit) {
         player_view *pv = &p->pv;
         session *s = p->s;
-        const yt_feed *f = req->feed;
         int act, leave = 0;
         double now;
 
         read_input(&in);
-        pv->has_prev = req->is_short && p->index > 0;
-        pv->has_next = req->is_short && p->index + 1 < f->nshorts;
+        pv->has_prev = p->is_short && p->index > 0;
+        pv->has_next = p->is_short && p->index + 1 < p->shorts.n;
         act = player_update(pv, &in);
 
         switch (act) {
@@ -569,7 +655,7 @@ int player_run(play_request *req)
                 pv->notice_timer = 90;
                 break;
             }
-            if (req->is_short) {
+            if (p->is_short) {
                 p->short_quality = pv->want_quality;
             } else {
                 g_settings.quality = pv->want_quality;
@@ -600,6 +686,8 @@ int player_run(play_request *req)
             if (!r)
                 break;
             p->index = to;
+            if (p->state == ST_WAITING)
+                break;
             if (p->state == ST_OPENING) { /* switch once the current lookup finishes */
                 snprintf(pv->title, sizeof pv->title, "%s", r->title);
                 snprintf(pv->channel, sizeof pv->channel, "%s", r->channel);
@@ -616,7 +704,16 @@ int player_run(play_request *req)
 
         /* Background work. */
         if (req->tick)
-            req->tick(req->tick_ud, req->is_short && f->continuation && p->index + 4 >= f->nshorts);
+            req->tick(req->tick_ud);
+        reels_tick(p);
+        if (p->state == ST_WAITING) {
+            if (p->shorts.n > 0) {
+                open_entry(p, 0);
+            } else if (!g_reels.j.thread && p->shorts_fails > 0) {
+                error_screen("Couldn't load Shorts.", "Check the connection and try again.");
+                break;
+            }
+        }
         poll_captions(p);
         if (p->state == ST_OPENING && job_collect(&g_start.j)) {
             if (p->index != p->loaded_index) {
@@ -625,13 +722,15 @@ int player_run(play_request *req)
                 p->state = ST_FAILED;
                 stop_streams(p);
                 wlog("error: %s: %s", g_start.err_title, g_start.err);
-                if (!req->is_short) {
+                if (!p->is_short) {
                     error_screen(g_start.err_title[0] ? g_start.err_title : "Could not play this video.", g_start.err);
                     break;
                 }
             } else {
-                if (g_start.load_info)
+                if (g_start.load_info) {
                     info_ready(p);
+                    history_add(s->video_id, p->is_short);
+                }
                 streams_ready(p);
                 if (p->state == ST_PLAYING && p->pending_seek >= 0) {
                     double t = p->pending_seek;
@@ -674,7 +773,7 @@ int player_run(play_request *req)
             /* The end. */
             if (!p->starting && !pv->paused && vq_finished(p->q) &&
                 (!g_clk.use_audio || (!p->audio_live && audio_buffered() == 0))) {
-                if (!req->is_short)
+                if (!p->is_short)
                     break;
                 restart_at(p, 0); /* Shorts loop */
             }
@@ -685,8 +784,8 @@ int player_run(play_request *req)
         }
 
         gfx_frame_begin();
-        dr_fill(0, 0, ui_width(), UI_H, req->is_short ? C_BG : 0x000000ffu);
-        if (req->is_short) {
+        dr_fill(0, 0, ui_width(), UI_H, p->is_short ? C_BG : 0x000000ffu);
+        if (p->is_short) {
             const float cw = (float)(int)(UI_H * 9 / 16);
             dr_fill((ui_width() - cw) / 2, 0, cw, UI_H, 0x000000ffu);
         }
@@ -696,13 +795,19 @@ int player_run(play_request *req)
             dr_video(p->frame, x, y, w, h); /* the GPU converts YUV to RGB */
         }
         player_draw_overlay(pv);
-        if (in.pointer && (pv->overlay_timer > 0 || pv->menu != MENU_CLOSED || req->is_short))
+        if (in.pointer && (pv->overlay_timer > 0 || pv->menu != MENU_CLOSED || p->is_short))
             ui_cursor(in.px, in.py);
         gfx_frame_end();
         g_frame++;
     }
 
     close_session(p);
+    if (g_reels.j.thread)
+        wait_job(&g_reels.j, "Closing...");
+    yt_feed_free(&g_reels.result);
+    yt_feed_free(&p->shorts);
     log_memory("after playback");
-    return p->index;
+    if (!req->feed)
+        return -1;
+    return p->is_short ? req->index : p->index;
 }

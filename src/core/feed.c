@@ -37,6 +37,7 @@ int yt_feed_cursor(yt_feed *dst, const yt_feed *src)
 {
     memset(dst, 0, sizeof *dst);
     dst->kind = src->kind;
+    dst->pos = src->pos;
     snprintf(dst->query, sizeof dst->query, "%s", src->query);
     if (src->continuation && !(dst->continuation = strdup(src->continuation)))
         return -1;
@@ -53,6 +54,8 @@ int yt_feed_merge(yt_feed *dst, yt_feed *src)
         push(dst, &r);
     }
     dst->nshelves += src->nshelves;
+    if (src->pos > dst->pos)
+        dst->pos = src->pos;
     free(dst->continuation);
     dst->continuation = src->continuation;
     src->continuation = NULL;

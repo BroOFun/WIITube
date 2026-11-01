@@ -113,7 +113,8 @@ int main(int argc, char **argv)
     char err[512];
     int widths[2] = { 640, 854 }, wi, failures = 0, n, got, total;
     wt_image *logo, *splash, *frame = NULL;
-    yt_feed videos, shorts, more;
+    yt_feed results, more, foryou, reels;
+    int first_video = 0;
 
     if (yt_load_rules(argc > 3 ? argv[3] : "rules/youtube.json", err, sizeof err) != 0 ||
         http_global_init(err, sizeof err) != 0) {
@@ -122,34 +123,61 @@ int main(int argc, char **argv)
     }
     logo = image_from_rgba(logo_small_rgba, logo_small_w, logo_small_h);
     splash = image_from_rgba(logo_splash_rgba, logo_splash_w, logo_splash_h);
-    memset(&videos, 0, sizeof videos);
-    memset(&shorts, 0, sizeof shorts);
-    n = yt_feed_start(&videos, query, YT_FEED_VIDEOS, err, sizeof err);
+    memset(&results, 0, sizeof results);
+    memset(&foryou, 0, sizeof foryou);
+    memset(&reels, 0, sizeof reels);
+
+    /* YouTube's normal search: videos with Shorts shelves, in YouTube's order. */
+    n = yt_feed_start(&results, query, YT_FEED_ALL, err, sizeof err);
     if (n <= 0) {
         fprintf(stderr, "search failed: %s\n", n < 0 ? err : "no results");
         return 1;
     }
-    printf("videos \"%s\": %d videos, %d Shorts, more: %s\n", query, videos.n, videos.nshorts,
-           videos.continuation ? "yes" : "no");
+    printf("search \"%s\": %d entries, %d Shorts in %d shelves, more: %s\n", query, results.n, results.nshorts,
+           results.nshelves, results.continuation ? "yes" : "no");
+    if (results.nshorts == 0)
+        failures++;
     /* Second page, loaded the way the Wii app does it (cursor + merge). */
-    if (yt_feed_cursor(&more, &videos) == 0 && yt_feed_more(&more, err, sizeof err) >= 0) {
-        int added = yt_feed_merge(&videos, &more);
-        printf("next page: +%d (now %d videos), more: %s\n", added, videos.n, videos.continuation ? "yes" : "no");
+    if (yt_feed_cursor(&more, &results) == 0 && yt_feed_more(&more, err, sizeof err) >= 0) {
+        int added = yt_feed_merge(&results, &more);
+        printf("next page: +%d (now %d entries, %d shelves), more: %s\n", added, results.n, results.nshelves,
+               results.continuation ? "yes" : "no");
         if (added <= 0)
             failures++;
     } else {
         printf("next page failed: %s\n", err);
         failures++;
     }
-    n = yt_feed_start(&shorts, query, YT_FEED_SHORTS, err, sizeof err);
-    printf("Shorts \"%s\": %d Shorts (%d with a vertical thumbnail URL), more: %s\n", query, shorts.nshorts,
-           shorts.nshorts > 0 && shorts.shorts[0].thumb_url[0] ? shorts.nshorts : 0, shorts.continuation ? "yes" : "no");
-    if (n <= 0)
+    while (first_video < results.n && results.items[first_video].is_short)
+        first_video++;
+
+    /* "For you": YouTube's recommendations for a watched video, two pages. */
+    n = yt_feed_start(&foryou, "dQw4w9WgXcQ", YT_FEED_RELATED, err, sizeof err);
+    printf("for you: %d videos%s%s\n", foryou.n, n < 0 ? " - " : "", n < 0 ? err : "");
+    if (n > 0 && yt_feed_cursor(&more, &foryou) == 0 && yt_feed_more(&more, err, sizeof err) >= 0)
+        printf("for you, next page: +%d\n", yt_feed_merge(&foryou, &more));
+    if (foryou.n < 10)
         failures++;
+
+    /* The Shorts feed continuing from the first Short of the search. */
+    {
+        int i;
+        for (i = 0; i < results.n && !results.items[i].is_short; i++)
+            ;
+        if (i < results.n) {
+            n = yt_feed_start(&reels, results.items[i].video_id, YT_FEED_REELS, err, sizeof err);
+            printf("Shorts feed after %s: %d Shorts%s%s\n", results.items[i].video_id, reels.n, n < 0 ? " - " : "",
+                   n < 0 ? err : "");
+            if (n > 0 && yt_feed_cursor(&more, &reels) == 0 && yt_feed_more(&more, err, sizeof err) >= 0)
+                printf("Shorts feed, next page: +%d\n", yt_feed_merge(&reels, &more));
+            if (reels.n < 3)
+                failures++;
+        }
+    }
     g_thumbs = thumbs_new("https://i.ytimg.com/vi/%s/mqdefault.jpg", 160, 64, 2);
 
     for (wi = 0; wi < 2; wi++) {
-        const int W = widths[wi];
+        const int W = widths[wi], cols = W >= 800 ? 4 : 3;
         browse_page *pg;
         int i;
         soft_begin(W);
@@ -157,37 +185,37 @@ int main(int argc, char **argv)
         browse_set_page(&b, PAGE_SEARCH);
         pg = &b.pages[PAGE_SEARCH];
         snprintf(pg->query, sizeof pg->query, "%s", query);
-        for (i = 0; i < videos.n; i++)
-            yt_feed_add(&pg->videos, &videos.items[i]);
-        for (i = 0; i < shorts.nshorts; i++)
-            yt_feed_add(&pg->shorts, &shorts.shorts[i]);
-        pg->started = 3;
-        pg->col = 1;
+        pg->feed.nshelves = results.nshelves;
+        for (i = 0; i < results.n; i++)
+            yt_feed_add(&pg->feed, &results.items[i]);
+        pg->feed.continuation = strdup("more");
+        pg->started = 1;
         draw_until_loaded(&b, W);
-        save(out, "live-home", W);
-        got = count_loaded(pg->videos.items, pg->videos.n < 2 * (W >= 800 ? 4 : 3) ? pg->videos.n : 2 * (W >= 800 ? 4 : 3),
-                           0, &total);
-        printf("width %d: %d of the first %d video thumbnails loaded\n", W, got, total);
+        save(out, "live-search", W);
+        got = count_loaded(pg->feed.items, pg->feed.n < 5 ? pg->feed.n : 5, 1, &total);
+        printf("width %d: %d of the first %d thumbnails loaded\n", W, got, total);
         if (got < total)
             failures++;
 
-        /* Scroll down to the Shorts shelf. */
-        {
-            ui_input in;
-            memset(&in, 0, sizeof in);
-            in.pressed = UI_DOWN;
-            browse_update(&b, &in);
-            browse_update(&b, &in);
-            in.pressed = 0;
-            for (i = 0; i < 30; i++)
-                browse_update(&b, &in);
-        }
+        /* The first regular videos. */
+        browse_select(&b, first_video);
         draw_until_loaded(&b, W);
-        save(out, "live-shorts", W);
-        got = count_loaded(pg->shorts.shorts, pg->shorts.nshorts < 5 ? pg->shorts.nshorts : 5, 1, &total);
-        printf("width %d: %d of the first %d Shorts thumbnails loaded\n", W, got, total);
+        save(out, "live-search-videos", W);
+        got = count_loaded(pg->feed.items + first_video, pg->feed.n - first_video < cols ? pg->feed.n - first_video : cols,
+                           0, &total);
+        printf("width %d: %d of %d video thumbnails loaded\n", W, got, total);
         if (got < total)
             failures++;
+
+        /* Home with "For you". */
+        browse_set_page(&b, PAGE_HOME);
+        b.has_for_you = 1;
+        pg = &b.pages[PAGE_HOME];
+        for (i = 0; i < foryou.n; i++)
+            yt_feed_add(&pg->feed, &foryou.items[i]);
+        pg->started = 1;
+        draw_until_loaded(&b, W);
+        save(out, "live-foryou", W);
     }
 
     /* Player screen using the first video's thumbnail (full size) as the picture. */
@@ -196,7 +224,7 @@ int main(int argc, char **argv)
         http_request req;
         http_response resp;
         memset(&req, 0, sizeof req);
-        snprintf(url, sizeof url, "https://i.ytimg.com/vi/%s/mqdefault.jpg", videos.items[0].video_id);
+        snprintf(url, sizeof url, "https://i.ytimg.com/vi/%s/mqdefault.jpg", results.items[first_video].video_id);
         req.url = url;
         req.headers = "User-Agent: Mozilla/5.0\r\n";
         if (http_do(&req, &resp, err, sizeof err) == 0 && resp.status == 200)
@@ -207,8 +235,8 @@ int main(int argc, char **argv)
         player_view p;
         float x, y, w, h;
         player_view_init(&p);
-        snprintf(p.title, sizeof p.title, "%s", videos.items[0].title);
-        snprintf(p.channel, sizeof p.channel, "%s", videos.items[0].channel);
+        snprintf(p.title, sizeof p.title, "%s", results.items[first_video].title);
+        snprintf(p.channel, sizeof p.channel, "%s", results.items[first_video].channel);
         p.position = 83;
         p.duration = 600;
         p.buffered = 0.4f;

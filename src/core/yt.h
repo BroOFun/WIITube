@@ -19,7 +19,11 @@ typedef struct {
 /* Endless result lists: the first page plus every page loaded since (YouTube's
  * "continuation" tokens), in YouTube's order. Shorts shelves are runs of entries with the
  * same shelf number; Shorts can also appear on their own. */
-enum { YT_FEED_VIDEOS, YT_FEED_SHORTS, YT_FEED_ALL };
+enum {
+    YT_FEED_VIDEOS, YT_FEED_SHORTS, YT_FEED_ALL, /* search: Videos filter, Shorts filter, normal */
+    YT_FEED_RELATED, /* YouTube's "Up next" recommendations; query = watched video IDs, newest first */
+    YT_FEED_REELS,   /* YouTube's Shorts feed; query = the Short to continue from */
+};
 #define YT_FEED_MAX 600 /* stop growing a list beyond this many entries */
 
 typedef struct {
@@ -27,13 +31,14 @@ typedef struct {
     int n, cap;
     int nshorts;              /* how many entries are Shorts */
     int nshelves;             /* shelf numbers used so far */
+    int pos;                  /* YT_FEED_RELATED: next watched video to get recommendations for */
     char *continuation;       /* token for the next page, NULL at the end */
     char query[128];
     int kind;
 } yt_feed;
 
-/* First page of a search: YT_FEED_ALL is YouTube's normal search (videos with Shorts
- * shelves), the others apply YouTube's Videos / Shorts filter. Clears f first.
+/* First page of a list (see the YT_FEED_* kinds). YT_FEED_ALL is YouTube's normal search:
+ * videos with Shorts shelves, in YouTube's order. Clears f first.
  * Returns the number of entries added, or -1 on error. */
 int yt_feed_start(yt_feed *f, const char *query, int kind, char *err, size_t errlen);
 /* Append the next page. Returns entries added (0 when there are no more pages), -1 on error. */
@@ -46,8 +51,9 @@ int yt_feed_cursor(yt_feed *dst, const yt_feed *src);
 int yt_feed_merge(yt_feed *dst, yt_feed *src);
 /* Append one entry, skipping repeats. */
 void yt_feed_add(yt_feed *f, const yt_search_result *r);
-/* Parse a saved search response into f (tests). */
-int yt_feed_parse_json(yt_feed *f, const char *json, int continuation_page);
+/* Parse a saved response into f (tests). */
+enum { YT_PAGE_SEARCH, YT_PAGE_SEARCH_MORE, YT_PAGE_RELATED, YT_PAGE_REELS };
+int yt_feed_parse_json(yt_feed *f, const char *json, int page);
 
 typedef struct {
     int itag;
