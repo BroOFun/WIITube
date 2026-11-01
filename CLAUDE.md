@@ -87,6 +87,40 @@ The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cl
    Only change C code if the request/response *shape* changed.
 3. Bump `rules_version`/`updated`, then test with `wiitube-cli info` and `get`.
 
+## Status (2026-11-01, night) — v0.6: YouTube's own order, recommendations and Shorts feed
+- User report on v0.5: "the search categories tabs and shorts don't work"; wants search
+  exactly like YouTube's default (Shorts shelves among the videos), recommendations pulled
+  from YouTube itself, and working Shorts.
+- Search = YouTube's normal search (no filter params). `yt_feed` is now ONE ordered list
+  (`items`); Shorts in a shelf carry `shelf` = shelf number (`gridShelfViewModel`,
+  `reelShelfRenderer`, `richShelfRenderer` start a new number; `yt_feed_merge` renumbers
+  shelves of later pages). Also parsed: `gridVideoRenderer` (titled `shelfRenderer`
+  horizontal lists), `compactVideoRenderer`, full `lockupViewModel` (channel, views,
+  date, duration badge). Real page order: `[Shorts x5] v v v [Shorts x20] v v v ...`.
+- Recommendations, checked live with `wiitube-cli dump`: logged-out home is empty on every
+  client (web: "Try searching to get started", TV/MWEB: "sign in"; FEtrending/FEexplore
+  give HTTP 400), and reporting watches (videostats playback/watchtime pings, HTTP 204)
+  does NOT make the logged-out home fill in. What works logged out:
+  - `next` (Up next) for a video: 20 related videos + continuation token
+    (`onResponseReceivedEndpoints.0.appendContinuationItemsAction`). `YT_FEED_RELATED`
+    uses it: query = watched video IDs (newest first); page 1 of each seed, then the last
+    seed's continuation; watched videos are dropped. This is the "For you" chip.
+  - `reel/reel_watch_sequence` with `sequenceParams` = base64 of protobuf {1: videoId}
+    (built by us; YouTube's own sequenceParams also list the next IDs): ~8 Shorts that
+    follow that Short. Responses are ~700 KB because entry 0 carries prefetched player
+    data. `YT_FEED_REELS`: query = seed, continuation = last Short (a walk along related
+    Shorts). The continuation token YouTube returns gave only 1 entry, so it isn't used.
+- Wii app: watch history `sd:/apps/wiitube/history.txt` ("v ID"/"s ID", newest first,
+  40 max; `history_add` when a video starts). Home chips: "For you" (only once something
+  was watched; refreshed whenever picked) then topics (normal search). The rail's Shorts
+  button opens the Shorts player directly (`player_run` with `feed == NULL`), continuing
+  from the last Short watched, else from Shorts found by searching "#shorts". A Short
+  tapped in a list plays, then the rest of its shelf, then the Shorts feed after it
+  (player.c keeps its own queue and `reels_job`). One page-loading job slot in main.c.
+- `.github/workflows/wii-build.yml` keeps the previous WiiTube.zip on `ci-build` when a
+  build fails (so the download link never breaks); `zip_commit.txt` says which commit it is.
+  Don't cancel a Wii build run: the publish step runs anyway.
+
 ## Status (2026-11-01, late) — v0.5: browse/player overhaul (not yet tested on hardware)
 - User asked for: home recommendations reachable while browsing, QWERTY keyboard, a sidebar
   for pointer scrolling, endless results (home + search), Shorts (Down = next), seeking
@@ -113,7 +147,8 @@ The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cl
     if a file lacks tfdt). Playback starts at the video piece's start; audio before it is
     dropped in `feed_audio`. Verified live: `wiitube-cli seek dQw4w9WgXcQ 60` -> first frame
     55.400 s exactly as the index says (smoke test step `seek-timestamps`).
-- UI (`src/ui/browse.c`, `keyboard.c`, `player_ui.c`; `screens.c` is gone): left rail
+- UI (`src/ui/browse.c`, `keyboard.c`, `player_ui.c`; `screens.c` is gone; v0.6 replaced the
+  separate Shorts list / Shorts page described here): left rail
   Home/Shorts/Search, topic chips, video grid with a Shorts shelf after 2 rows, Shorts page
   grid, scrollbar draggable with A held (`ui_input.held`), Nunchuk stick scroll
   (`ui_input.stick_x/y`), footer spinner while the next page loads (`want_videos` /

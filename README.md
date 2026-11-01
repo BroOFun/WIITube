@@ -20,11 +20,12 @@ Controls (Wii Remote; a Nunchuk or GameCube controller also works):
 |---|---|
 | Browsing | Point or D-Pad to move, **A** select, **B** back to Home, **+** search, **1** default quality, **HOME** exit |
 | | Left rail: **Home** / **Shorts** / **Search**; the WiiTube logo also goes Home |
+| | Home chips: **For you** (YouTube's recommendations for what you watched) and topics |
 | | Scrollbar on the right: point, hold **A** and drag (or Nunchuk stick); more videos load as you scroll |
 | Video | **A** pause, **Left/Right** or Nunchuk stick skip 10 s, point at the progress bar + **A** to jump |
 | | **1** captions on/off (English), **2** settings: quality, captions, audio track (dubs) |
 | | **+/-** or **Up/Down** volume, **B** back |
-| Shorts | **Up/Down** previous / next Short (they loop like on YouTube) |
+| Shorts | **Up/Down** previous / next Short (YouTube's Shorts feed; each Short loops like on YouTube) |
 
 Quality (144p-480p, 480p by default) and captions on/off are remembered on the SD card.
 
@@ -34,10 +35,11 @@ when reporting the problem.
 ## Status
 - Desktop prototype (`wiitube-cli`): HTTPS client, YouTube search, stream lookup and
   download, tested daily against the live site on GitHub Actions.
-- Wii app (v0.5): YouTube-style interface tested on a Wii U (vWii): Home with topic chips
-  and a Shorts shelf, a Shorts page, endless results, QWERTY search keyboard; player with
-  seeking, captions, quality and audio-track menu, and a vertical Shorts player. The GPU
-  converts the video colours, so 480p plays smoothly.
+- Wii app (v0.6): YouTube-style interface tested on a Wii U (vWii). Search results come in
+  YouTube's own order with Shorts shelves; Home has "For you" (YouTube's recommendations
+  for the videos you watched) and topics; the Shorts button plays YouTube's Shorts feed.
+  Endless results, QWERTY keyboard, seeking, captions, quality and audio-track menu. The
+  GPU converts the video colours, so 480p plays smoothly.
 
 ## Building the desktop prototype (Linux / WSL / macOS)
 Needs a C compiler, `make`, `curl`, and zlib headers (`zlib1g-dev` on Debian/Ubuntu).
