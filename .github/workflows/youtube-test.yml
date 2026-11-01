@@ -47,6 +47,17 @@ jobs:
           set -o pipefail
           sh tests/youtube_smoke.sh "$VIDEO" 2>&1 | tee results.txt
 
+      - name: Live UI preview (real search results and thumbnails)
+        id: live
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          make build/linux/ui_live
+          mkdir -p test-output/ui
+          build/linux/ui_live "wii sports" test-output/ui 2>&1 | tee live.txt
+          for f in test-output/ui/*.ppm; do ffmpeg -hide_banner -loglevel error -y -i "$f" "${f%.ppm}.png" && rm "$f"; done
+          ls -l test-output/ui
+
       - name: Upload downloaded video
         if: always()
         uses: actions/upload-artifact@v4
@@ -59,11 +70,14 @@ jobs:
       - name: Publish results.txt to the ci-results branch
         if: always()
         run: |
-          mkdir /tmp/ci && cp results.txt /tmp/ci/ && cd /tmp/ci
+          mkdir /tmp/ci && cp results.txt /tmp/ci/
+          [ -f live.txt ] && cp live.txt /tmp/ci/
+          cp test-output/ui/*.png /tmp/ci/ 2>/dev/null || true
+          cd /tmp/ci
           git init -q -b ci-results
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add results.txt
+          git add -A
           git commit -q -m "Results for ${GITHUB_SHA::7} (${{ github.event_name }})"
           git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" ci-results
 

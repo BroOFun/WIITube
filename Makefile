@@ -93,6 +93,18 @@ ui-preview: $(BUILD)/ui_preview
 	$(BUILD)/ui_preview $(BUILD)/preview-thumbs $(BUILD)/preview
 	python3 -I tests/ppm2png.py $(BUILD)/preview
 
+# Live preview with real search results and thumbnails (needs YouTube access; used in CI):
+#   make build/linux/ui_live && build/linux/ui_live "wii sports" OUTDIR
+UI_LIVE_SRCS := tests/ui_live.c src/ui/screens.c src/ui/ui_common.c src/ui/atlas_data.c \
+                src/platform/linux/soft_draw.c src/platform/wii/logo_data.c src/core/image.c src/core/convert.c \
+                src/core/thumbs.c src/core/http.c src/core/yt.c src/core/log.c src/platform/linux/net_linux.c \
+                src/platform/linux/thread_posix.c third_party/cJSON/cJSON.c
+
+$(BUILD)/ui_live: $(UI_LIVE_SRCS) $(BUILD)/libmbedtls.a $(BUILD)/rules_builtin.o $(wildcard src/ui/*.h src/core/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(APP_FLAGS) $(MBED_DEF) $(INCS) -Ithird_party/stb -o $@ $(UI_LIVE_SRCS) \
+	    $(BUILD)/rules_builtin.o $(BUILD)/libmbedtls.a -lz -lpthread
+
 test: test-media test-thumbs
 
 test-media: $(BUILD)/test_media
