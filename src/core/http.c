@@ -2,9 +2,12 @@
  *
  * Features: CONNECT proxy (development only), chunked transfer decoding, optional gzip
  * (when built with WIITUBE_HAVE_ZLIB), redirects, streaming or buffered bodies.
- * One connection per request ("Connection: close") to keep the code simple for now. */
+ * Keep-alive: finished connections go back to a small pool and are reused for the next
+ * request to the same server (TLS handshakes are slow on a Wii); a reused connection that
+ * turns out to be closed is retried once on a fresh one. */
 #include "http.h"
 #include "net.h"
+#include "thread.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -25,10 +28,13 @@
 #define HTTP_TIMEOUT_MS 20000
 #define HTTP_MAX_HEADER 32768
 #define HTTP_DEFAULT_MAX_BUFFER (16u << 20)
+#define POOL_MAX 6
+#define POOL_IDLE_US (20u * 1000000u) /* servers drop idle connections after a while */
 
 /* ---- TLS global state ---------------------------------------------------- */
 
 static int g_inited;
+static wt_mutex *g_pool_mu;
 static mbedtls_entropy_context g_entropy;
 static mbedtls_ctr_drbg_context g_drbg;
 static mbedtls_x509_crt g_ca;
@@ -110,6 +116,7 @@ int http_global_init(char *err, size_t errlen)
     mbedtls_ssl_conf_ca_chain(&g_conf, &g_ca, NULL);
     mbedtls_ssl_conf_rng(&g_conf, mbedtls_ctr_drbg_random, &g_drbg);
     mbedtls_ssl_conf_read_timeout(&g_conf, HTTP_TIMEOUT_MS);
+    g_pool_mu = wt_mutex_new();
     g_inited = 1;
     return 0;
 }
@@ -232,6 +239,102 @@ static void conn_close(conn_t *c)
     plat_close(c->sock);
     c->sock = -1;
     c->tls = 0;
+}
+
+/* ---- connection pool ---------------------------------------------------------- */
+
+typedef struct {
+    conn_t *c;
+    char host[256];
+    int port, https;
+    uint64_t since;
+} pooled_t;
+
+static pooled_t g_pool[POOL_MAX];
+static int g_opened, g_reused; /* guarded by g_pool_mu */
+
+static void count_conn(int reused)
+{
+    if (!g_pool_mu)
+        return;
+    wt_mutex_lock(g_pool_mu);
+    if (reused)
+        g_reused++;
+    else
+        g_opened++;
+    wt_mutex_unlock(g_pool_mu);
+}
+
+void http_stats(int *opened, int *reused)
+{
+    if (g_pool_mu)
+        wt_mutex_lock(g_pool_mu);
+    *opened = g_opened;
+    *reused = g_reused;
+    if (g_pool_mu)
+        wt_mutex_unlock(g_pool_mu);
+}
+
+static void free_conn(conn_t *c)
+{
+    conn_close(c);
+    free(c);
+}
+
+/* Take an idle connection to host:port, or NULL. */
+static conn_t *pool_take(const char *host, int port, int https)
+{
+    conn_t *found = NULL, *expired[POOL_MAX];
+    uint64_t now = wt_time_us();
+    int i, nexp = 0;
+    if (!g_pool_mu)
+        return NULL;
+    wt_mutex_lock(g_pool_mu);
+    for (i = 0; i < POOL_MAX; i++) {
+        pooled_t *p = &g_pool[i];
+        if (!p->c)
+            continue;
+        if (now - p->since > POOL_IDLE_US) {
+            expired[nexp++] = p->c;
+            p->c = NULL;
+        } else if (!found && p->port == port && p->https == https && strcmp(p->host, host) == 0) {
+            found = p->c;
+            p->c = NULL;
+        }
+    }
+    wt_mutex_unlock(g_pool_mu);
+    for (i = 0; i < nexp; i++)
+        free_conn(expired[i]);
+    return found;
+}
+
+/* Keep a connection for reuse (closes the oldest one if the pool is full). */
+static void pool_put(conn_t *c, const char *host, int port, int https)
+{
+    conn_t *evict = NULL;
+    int i, slot = -1;
+    if (!g_pool_mu) {
+        free_conn(c);
+        return;
+    }
+    wt_mutex_lock(g_pool_mu);
+    for (i = 0; i < POOL_MAX; i++) {
+        if (!g_pool[i].c) {
+            slot = i;
+            break;
+        }
+        if (slot < 0 || g_pool[i].since < g_pool[slot].since)
+            slot = i;
+    }
+    evict = g_pool[slot].c;
+    g_pool[slot].c = c;
+    snprintf(g_pool[slot].host, sizeof g_pool[slot].host, "%s", host);
+    g_pool[slot].port = port;
+    g_pool[slot].https = https;
+    g_pool[slot].since = wt_time_us();
+    wt_mutex_unlock(g_pool_mu);
+    if (evict)
+        free_conn(evict);
 }
 
 /* ---- URL parsing ----------------------------------------------------------- */
@@ -480,30 +583,21 @@ static int do_one(const http_request *req, const char *url, const char *method, 
                   char *location, size_t loclen, char *err, size_t errlen)
 {
     url_t u;
-    conn_t *c;
+    conn_t *c = NULL;
     char line[4096], hostport[300];
     size_t hlen;
     char *head = NULL;
-    int chunked = 0, gzip = 0, rc = -1, header_bytes = 0;
+    int chunked = 0, gzip = 0, rc = -1, header_bytes = 0, keep = 1, attempt;
     long long length = -1;
     sink_t sink;
     const int has_body = req->body && req->body_len > 0 && strcmp(method, "GET") != 0 &&
                          strcmp(method, "HEAD") != 0;
 
+    memset(&sink, 0, sizeof sink);
     if (parse_url(url, &u) != 0) {
         set_err(err, errlen, "bad URL", url, 0);
         return -1;
     }
-    c = malloc(sizeof *c);
-    if (!c) {
-        set_err(err, errlen, "out of memory", NULL, 0);
-        return -1;
-    }
-    if (open_conn(c, &u, err, errlen) != 0) {
-        free(c);
-        return -1;
-    }
-
     if ((u.https && u.port == 443) || (!u.https && u.port == 80))
         snprintf(hostport, sizeof hostport, "%s", u.host);
     else
@@ -511,11 +605,11 @@ static int do_one(const http_request *req, const char *url, const char *method, 
 
     hlen = strlen(method) + strlen(u.path) + strlen(hostport) + (req->headers ? strlen(req->headers) : 0) + 256;
     head = malloc(hlen);
-    if (!head)
-        goto out;
-    snprintf(head, hlen,
-             "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nAccept-Encoding: %s\r\n%s",
-             method, u.path, hostport,
+    if (!head) {
+        set_err(err, errlen, "out of memory", NULL, 0);
+        return -1;
+    }
+    snprintf(head, hlen, "%s %s HTTP/1.1\r\nHost: %s\r\nAccept-Encoding: %s\r\n%s", method, u.path, hostport,
 #ifdef WIITUBE_HAVE_ZLIB
              "gzip",
 #else
@@ -527,20 +621,44 @@ static int do_one(const http_request *req, const char *url, const char *method, 
         snprintf(head + l, hlen - l, "Content-Length: %zu\r\n", req->body_len);
     }
     strcat(head, "\r\n");
-    if (conn_write_all(c, head, strlen(head)) != 0 ||
-        (has_body && conn_write_all(c, req->body, req->body_len) != 0)) {
-        set_err(err, errlen, "send failed", u.host, 0);
-        goto out;
-    }
 
-    if (conn_getline(c, line, sizeof line) < 0 || sscanf(line, "HTTP/%*s %d", &resp->status) != 1) {
-        set_err(err, errlen, "bad response", u.host, 0);
-        goto out;
+    /* Send the request and read the status line; a pooled connection may have been closed
+     * by the server in the meantime, so on failure retry once with a fresh connection. */
+    for (attempt = 0;; attempt++) {
+        int reused;
+        c = attempt == 0 ? pool_take(u.host, u.port, u.https) : NULL;
+        reused = c != NULL;
+        count_conn(reused);
+        if (!c) {
+            c = malloc(sizeof *c);
+            if (!c) {
+                set_err(err, errlen, "out of memory", NULL, 0);
+                goto out;
+            }
+            if (open_conn(c, &u, err, errlen) != 0) {
+                free(c);
+                c = NULL;
+                goto out;
+            }
+        }
+        if (conn_write_all(c, head, strlen(head)) == 0 &&
+            (!has_body || conn_write_all(c, req->body, req->body_len) == 0) &&
+            conn_getline(c, line, sizeof line) >= 0 && sscanf(line, "HTTP/%*s %d", &resp->status) == 1)
+            break;
+        free_conn(c);
+        c = NULL;
+        if (!reused) {
+            set_err(err, errlen, "no response", u.host, 0);
+            goto out;
+        }
     }
+    if (strncmp(line, "HTTP/1.0", 8) == 0)
+        keep = 0;
     for (;;) {
         int n = conn_getline(c, line, sizeof line);
         if (n < 0) {
             set_err(err, errlen, "bad headers", u.host, 0);
+            keep = 0;
             goto out;
         }
         if (n == 0)
@@ -548,6 +666,7 @@ static int do_one(const http_request *req, const char *url, const char *method, 
         header_bytes += n;
         if (header_bytes > HTTP_MAX_HEADER) {
             set_err(err, errlen, "headers too large", u.host, 0);
+            keep = 0;
             goto out;
         }
         if (ci_prefix(line, "content-length:"))
@@ -556,6 +675,8 @@ static int do_one(const http_request *req, const char *url, const char *method, 
             chunked = 1;
         else if (ci_prefix(line, "content-encoding:") && strstr(line, "gzip"))
             gzip = 1;
+        else if (ci_prefix(line, "connection:") && (strstr(line, "close") || strstr(line, "Close")))
+            keep = 0;
         else if (ci_prefix(line, "location:") && location) {
             const char *v = line + 9;
             while (*v == ' ')
@@ -570,8 +691,9 @@ static int do_one(const http_request *req, const char *url, const char *method, 
     }
     resp->content_length = length;
 
-    /* Redirect: the caller follows it; the body is not needed. */
+    /* Redirect: the caller follows it; the body is not needed (so don't reuse). */
     if (location && *location && resp->status >= 300 && resp->status < 400) {
+        keep = 0;
         rc = 0;
         goto out;
     }
@@ -580,30 +702,33 @@ static int do_one(const http_request *req, const char *url, const char *method, 
         goto out;
     }
 
-    memset(&sink, 0, sizeof sink);
     sink.req = req;
     sink.resp = resp;
     sink.max = req->max_buffer ? req->max_buffer : HTTP_DEFAULT_MAX_BUFFER;
 #ifdef WIITUBE_HAVE_ZLIB
     if (gzip) {
         sink.gzip = 1;
-        if (inflateInit2(&sink.zs, 15 + 32) != Z_OK)
+        if (inflateInit2(&sink.zs, 15 + 32) != Z_OK) {
+            keep = 0;
             goto out;
+        }
     }
 #else
     if (gzip) {
         set_err(err, errlen, "server sent gzip but zlib support is off", NULL, 0);
+        keep = 0;
         goto out;
     }
 #endif
     if (!chunked && length < 0)
-        length = -1; /* read until close */
+        keep = 0; /* body ends when the server closes the connection */
     rc = read_body(c, &sink, chunked, chunked ? 0 : length, err, errlen);
 #ifdef WIITUBE_HAVE_ZLIB
     if (sink.gzip)
         inflateEnd(&sink.zs);
 #endif
     if (rc != 0) {
+        keep = 0;
         if (sink.aborted)
             set_err(err, errlen, "aborted by callback", NULL, 0);
         else if (sink.overflow)
@@ -614,8 +739,12 @@ static int do_one(const http_request *req, const char *url, const char *method, 
 
 out:
     free(head);
-    conn_close(c);
-    free(c);
+    if (c) {
+        if (rc == 0 && keep && c->rpos == c->rlen)
+            pool_put(c, u.host, u.port, u.https);
+        else
+            free_conn(c);
+    }
     return rc;
 }
 

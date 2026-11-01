@@ -10,7 +10,7 @@ static void usage(void)
 {
     fprintf(stderr,
             "usage: wiitube-cli [--rules FILE] COMMAND ...\n"
-            "  fetch URL                 HTTPS GET; print status and size (connectivity test)\n"
+            "  fetch URL...              HTTPS GET each URL; print status and size (connectivity test)\n"
             "  search QUERY...           search YouTube\n"
             "  info VIDEO                list streams (VIDEO = id or URL)\n"
             "  get VIDEO [-q HEIGHT] [-o NAME]\n"
@@ -200,8 +200,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "error: %s\n", err);
         return 1;
     }
-    if (strcmp(argv[i], "fetch") == 0 && i + 1 < argc)
-        return cmd_fetch(argv[i + 1]);
+    if (strcmp(argv[i], "fetch") == 0 && i + 1 < argc) {
+        int k, rc = 0, opened, reused;
+        for (k = i + 1; k < argc; k++)
+            rc |= cmd_fetch(argv[k]);
+        http_stats(&opened, &reused);
+        printf("connections: %d opened, %d reused\n", opened, reused);
+        return rc;
+    }
     if (strcmp(argv[i], "search") == 0 && i + 1 < argc)
         return cmd_search(argc - i - 1, argv + i + 1);
     if (strcmp(argv[i], "info") == 0 && i + 1 < argc)

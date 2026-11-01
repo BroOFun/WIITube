@@ -15,7 +15,7 @@ MBED_SRCS := $(wildcard $(MBED)/library/*.c)
 MBED_OBJS := $(patsubst $(MBED)/library/%.c,$(BUILD)/mbedtls/%.o,$(MBED_SRCS))
 
 APP_SRCS := src/core/http.c src/core/yt.c src/platform/linux/net_linux.c src/cli/main.c \
-            third_party/cJSON/cJSON.c
+            src/platform/linux/thread_posix.c third_party/cJSON/cJSON.c
 APP_OBJS := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS)) $(BUILD)/rules_builtin.o
 
 CFLAGS   ?= -O2 -g
@@ -23,7 +23,7 @@ MBED_DEF := -DMBEDTLS_USER_CONFIG_FILE='"wiitube_mbedtls_user.h"'
 INCS     := -Isrc/core -I$(MBED)/include -Ithird_party/cJSON
 APP_FLAGS  := -std=c99 -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
               -Wno-unknown-warning-option -D_POSIX_C_SOURCE=200809L -DWIITUBE_HAVE_ZLIB
-LIBS     := -lz
+LIBS     := -lz -lpthread
 
 ifeq ($(shell uname -s),Darwin)
 APP_FLAGS += -D_DARWIN_C_SOURCE
@@ -68,6 +68,19 @@ $(BUILD)/test_media: $(TEST_MEDIA_SRCS) $(wildcard src/core/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(APP_FLAGS) $(FFMPEG_CFLAGS) -o $@ $(TEST_MEDIA_SRCS) $(FFMPEG_LIBS) -lpthread -lm
 
+TEST_THUMBS_SRCS := tests/test_thumbs.c src/core/thumbs.c src/core/image.c src/core/convert.c src/core/http.c \
+                    src/core/log.c src/platform/linux/net_linux.c src/platform/linux/thread_posix.c
+
+$(BUILD)/test_thumbs: $(TEST_THUMBS_SRCS) $(BUILD)/libmbedtls.a $(wildcard src/core/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(APP_FLAGS) $(MBED_DEF) $(INCS) -Ithird_party/stb -o $@ $(TEST_THUMBS_SRCS) \
+	    $(BUILD)/libmbedtls.a -lz -lpthread
+
+test-thumbs: $(BUILD)/test_thumbs
+	sh tests/run_thumbs_test.sh $(BUILD)
+
+test: test-media test-thumbs
+
 test-media: $(BUILD)/test_media
 	sh tests/make_clips.sh $(BUILD)/clips
 	$(BUILD)/test_media $(BUILD)/clips/video.mp4 $(BUILD)/clips/audio.m4a $(BUILD)/clips/ref.rgb
@@ -75,4 +88,4 @@ test-media: $(BUILD)/test_media
 clean:
 	rm -rf build wiitube-cli
 
-.PHONY: all clean test-media
+.PHONY: all clean test test-media test-thumbs

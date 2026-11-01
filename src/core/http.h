@@ -36,6 +36,9 @@ int http_do(const http_request *req, http_response *resp, char *err, size_t errl
 
 void http_response_free(http_response *resp);
 
+/* Connections opened vs. reused from the keep-alive pool since start (for logs/tests). */
+void http_stats(int *opened, int *reused);
+
 /* Percent-encode a string for use in a URL query. Caller frees. */
 char *http_urlencode(const char *s);
 
