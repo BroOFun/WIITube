@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "../../core/thread.h"
+#include "mbedtls/platform_time.h"
 #include "mbedtls/threading.h"
 #include "threading_alt.h"
 
@@ -61,6 +62,9 @@ void wt_thread_join(wt_thread *t) { if (t) { LWP_JoinThread(t->t, NULL); free(t)
 void wt_thread_detach(wt_thread *t) { free(t); }
 
 uint64_t wt_time_us(void) { return ticks_to_microsecs(gettime()); }
+
+/* Milliseconds since boot, for mbedTLS (MBEDTLS_PLATFORM_MS_TIME_ALT). */
+mbedtls_ms_time_t mbedtls_ms_time(void) { return (mbedtls_ms_time_t)ticks_to_millisecs(gettime()); }
 void wt_sleep_ms(int ms) { usleep((useconds_t)ms * 1000u); }
 
 /* ---- mbedTLS mutexes ---- */

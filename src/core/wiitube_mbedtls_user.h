@@ -20,6 +20,8 @@
  * RNG and PSA key store need locking. Mutexes come from libogc (see thread_wii.c). */
 #define MBEDTLS_THREADING_C
 #define MBEDTLS_THREADING_ALT
+/* mbedTLS can't find a millisecond clock on this target; thread_wii.c provides one. */
+#define MBEDTLS_PLATFORM_MS_TIME_ALT
 #endif
 
 /* Not needed by an HTTPS client; trims code size. */
