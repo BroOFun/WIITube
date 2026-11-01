@@ -1,0 +1,100 @@
+# Builds the Wii app (boot.dol) in devkitPro's official container.
+# Results go to the ci-build branch: status.txt, build logs, and WIITube-wii.zip
+# (download: https://github.com/BroOFun/wiitube/raw/ci-build/WIITube-wii.zip).
+name: Wii build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'rules/**'
+      - 'deps/**'
+      - 'third_party/**'
+      - 'wii/**'
+      - 'Makefile.wii'
+      - '.github/workflows/wii-build.yml'
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitppc:latest
+    timeout-minutes: 45
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends git curl ca-certificates make zip xz-utils bzip2 >/dev/null
+          dkp-pacman -S --noconfirm --needed ppc-zlib libfat-ogc || true
+          echo "DEVKITPRO=$DEVKITPRO DEVKITPPC=$DEVKITPPC"
+          ls "$DEVKITPRO/portlibs/ppc/lib" | head -20
+
+      - uses: actions/checkout@v4
+
+      - name: Cache FFmpeg build
+        uses: actions/cache@v4
+        with:
+          path: build/ffmpeg-wii
+          key: ffmpeg-wii-${{ hashFiles('deps/build_ffmpeg_wii.sh') }}
+
+      - name: Build FFmpeg
+        id: ffmpeg
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          sh deps/build_ffmpeg_wii.sh build/ffmpeg-wii 2>&1 | tee ffmpeg.log
+
+      - name: Build WIITube
+        id: app
+        if: steps.ffmpeg.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          sh deps/fetch.sh
+          curl -sSfL -o deps/src/cacert.pem https://curl.se/ca/cacert.pem
+          make -f Makefile.wii -j"$(nproc)" -k 2>&1 | tee build.log
+
+      - name: Publish results to the ci-build branch
+        if: always()
+        run: |
+          mkdir -p /tmp/out
+          {
+            echo "commit:  ${GITHUB_SHA::7}"
+            echo "date:    $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo "ffmpeg:  ${{ steps.ffmpeg.outcome }}"
+            echo "app:     ${{ steps.app.outcome }}"
+          } > /tmp/out/status.txt
+          [ -f ffmpeg.log ] && tail -c 200000 ffmpeg.log > /tmp/out/ffmpeg.log
+          [ -f build.log ] && tail -c 300000 build.log > /tmp/out/build.log
+          grep -E "error|warning" build.log 2>/dev/null | head -300 > /tmp/out/diagnostics.txt || true
+          if [ -f build/wii/WIITube-wii.zip ]; then
+            cp build/wii/WIITube-wii.zip /tmp/out/
+            ls -l build/wii/boot.dol >> /tmp/out/status.txt
+          fi
+          cat /tmp/out/status.txt
+          cd /tmp/out
+          git init -q -b ci-build
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Wii build of ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" ci-build
+
+      - name: Upload app
+        if: steps.app.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WIITube-wii
+          path: build/wii/WIITube-wii.zip
+
+      - name: Fail if the build failed
+        if: steps.ffmpeg.outcome != 'success' || steps.app.outcome != 'success'
+        run: exit 1

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+  <name>WIITube</name>
+  <coder>BroOFun</coder>
+  <version>@VERSION@</version>
+  <release_date>@DATE@</release_date>
+  <short_description>Standalone YouTube player</short_description>
+  <long_description>Search and watch YouTube directly on the Wii, with no PC or proxy server.
+
+Wii Remote: D-Pad to move, A to select, B to go back, + to search, 1 to change quality.
+While playing: A pauses, +/- change the volume, B returns to the results.
+
+A log is written to sd:/apps/wiitube/wiitube.log.</long_description>
+</app>

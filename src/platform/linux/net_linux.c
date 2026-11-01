@@ -82,6 +82,8 @@ const char *plat_https_proxy(void)
     return hostport;
 }
 
+const char *plat_ca_bundle_pem(void) { return NULL; }
+
 const char *plat_ca_bundle_path(void)
 {
     static const char *candidates[] = {

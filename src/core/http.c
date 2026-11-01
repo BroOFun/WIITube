@@ -83,8 +83,19 @@ int http_global_init(char *err, size_t errlen)
         set_err(err, errlen, "seeding RNG failed", NULL, rc);
         return -1;
     }
-    ca = plat_ca_bundle_path();
-    rc = mbedtls_x509_crt_parse_file(&g_ca, ca);
+    if ((ca = plat_ca_bundle_pem()) != NULL) {
+        /* Returns the number of certificates it could not parse; only < 0 is fatal. */
+        rc = mbedtls_x509_crt_parse(&g_ca, (const unsigned char *)ca, strlen(ca) + 1);
+        ca = "built-in";
+    } else {
+#ifdef MBEDTLS_FS_IO
+        ca = plat_ca_bundle_path();
+        rc = mbedtls_x509_crt_parse_file(&g_ca, ca);
+#else
+        ca = "none";
+        rc = MBEDTLS_ERR_X509_FILE_IO_ERROR;
+#endif
+    }
     if (rc < 0) {
         set_err(err, errlen, "loading CA bundle failed", ca, rc);
         return -1;

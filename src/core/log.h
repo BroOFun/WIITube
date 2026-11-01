@@ -6,6 +6,9 @@
 /* Open a log file (appending). NULL or failure keeps logging to stderr. */
 void wlog_open(const char *path);
 void wlog_close(void);
+/* Drop log lines instead of writing them to stderr when no file is open (on the Wii,
+ * stderr is the on-screen console). */
+void wlog_quiet(int quiet);
 void wlog(const char *fmt, ...)
 #ifdef __GNUC__
     __attribute__((format(printf, 1, 2)))

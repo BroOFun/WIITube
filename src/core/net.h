@@ -22,7 +22,9 @@ int plat_entropy(unsigned char *buf, size_t len);
  * Returns NULL when no proxy should be used. The Wii build always returns NULL. */
 const char *plat_https_proxy(void);
 
-/* Path of the CA certificate bundle (PEM) used to verify servers. */
+/* CA certificates (PEM) used to verify servers: either a built-in copy (returned by
+ * plat_ca_bundle_pem, the Wii) or a file (plat_ca_bundle_path, desktop). */
+const char *plat_ca_bundle_pem(void);
 const char *plat_ca_bundle_path(void);
 
 #endif

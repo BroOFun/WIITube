@@ -1,0 +1,91 @@
+# Wii build (devkitPPC + libogc). Runs in the devkitpro/devkitppc Docker image, see
+# .github/workflows/wii-build.yml. Prerequisites:
+#   sh deps/fetch.sh                                    (mbedTLS)
+#   sh deps/build_ffmpeg_wii.sh build/ffmpeg-wii        (FFmpeg for the Wii)
+#   deps/src/cacert.pem                                 (Mozilla CA bundle)
+#   make -f Makefile.wii
+# Output: build/wii/boot.dol and build/wii/WIITube-wii.zip (Homebrew Channel folder).
+
+ifeq ($(strip $(DEVKITPPC)),)
+$(error DEVKITPPC is not set; build inside the devkitpro/devkitppc container)
+endif
+
+APP_VERSION   ?= 0.1
+FFMPEG_PREFIX ?= build/ffmpeg-wii
+CACERT        ?= deps/src/cacert.pem
+
+PREFIX  := $(DEVKITPPC)/bin/powerpc-eabi-
+CC      := $(PREFIX)gcc
+AR      := $(PREFIX)ar
+ELF2DOL := $(DEVKITPRO)/tools/bin/elf2dol
+LIBOGC  := $(DEVKITPRO)/libogc
+PORTLIBS:= $(DEVKITPRO)/portlibs/ppc
+BUILD   := build/wii
+MBED    := deps/src/mbedtls
+
+MACHDEP := -DGEKKO -mrvl -mcpu=750 -meabi -mhard-float
+DEFS    := -DWIITUBE_PLATFORM_WII -DWIITUBE_HAVE_ZLIB -DAPP_VERSION='"$(APP_VERSION)"' \
+           -DMBEDTLS_USER_CONFIG_FILE='"wiitube_mbedtls_user.h"'
+INCS    := -Isrc/core -Isrc/platform/wii -I$(MBED)/include -Ithird_party/cJSON \
+           -I$(LIBOGC)/include -I$(PORTLIBS)/include -I$(FFMPEG_PREFIX)/include
+CFLAGS  := -O2 -g -std=gnu99 -Wall -Wno-unused-parameter -Wno-format-truncation $(MACHDEP) $(DEFS) $(INCS)
+LDFLAGS := $(MACHDEP) -Wl,-Map,$(BUILD)/wiitube.map -L$(FFMPEG_PREFIX)/lib -L$(LIBOGC)/lib/wii -L$(PORTLIBS)/lib
+LIBS    := -lavformat -lavcodec -lavutil -lz -lfat -lwiiuse -lbte -lasnd -logc -lm
+
+APP_SRCS := src/core/http.c src/core/yt.c src/core/ring.c src/core/stream.c src/core/media.c \
+            src/core/convert.c src/core/vqueue.c src/core/log.c third_party/cJSON/cJSON.c \
+            src/platform/wii/main.c src/platform/wii/gfx.c src/platform/wii/audio.c \
+            src/platform/wii/net_wii.c src/platform/wii/thread_wii.c
+APP_OBJS := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS)) $(BUILD)/rules_builtin.o $(BUILD)/cacert.o
+
+MBED_SRCS := $(wildcard $(MBED)/library/*.c)
+MBED_OBJS := $(patsubst $(MBED)/library/%.c,$(BUILD)/mbedtls/%.o,$(MBED_SRCS))
+
+all: $(BUILD)/WIITube-wii.zip
+
+$(BUILD)/wiitube.elf: $(APP_OBJS) $(BUILD)/libmbedtls.a
+	$(CC) $(LDFLAGS) -o $@ $(APP_OBJS) $(BUILD)/libmbedtls.a $(LIBS)
+
+$(BUILD)/boot.dol: $(BUILD)/wiitube.elf
+	$(ELF2DOL) $< $@
+
+$(BUILD)/WIITube-wii.zip: $(BUILD)/boot.dol wii/meta.xml
+	rm -rf $(BUILD)/pkg && mkdir -p $(BUILD)/pkg/apps/wiitube
+	cp $(BUILD)/boot.dol $(BUILD)/pkg/apps/wiitube/boot.dol
+	sed -e 's/@VERSION@/$(APP_VERSION)/' -e "s/@DATE@/$$(date -u +%Y%m%d)/" wii/meta.xml \
+	    > $(BUILD)/pkg/apps/wiitube/meta.xml
+	cd $(BUILD)/pkg && rm -f ../WIITube-wii.zip && zip -qr ../WIITube-wii.zip apps
+
+$(BUILD)/libmbedtls.a: $(MBED_OBJS)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+$(BUILD)/mbedtls/%.o: $(MBED)/library/%.c src/core/wiitube_mbedtls_user.h src/platform/wii/threading_alt.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(MBED)/library -c $< -o $@
+
+$(BUILD)/%.o: %.c $(wildcard src/core/*.h src/platform/wii/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Text files embedded as C strings.
+define embed
+	@mkdir -p $(dir $@)
+	{ echo 'const char $(1)[] ='; \
+	  sed -e 's/\r$$//' -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/"/' -e 's/$$/\\n"/' $<; \
+	  echo ';'; } > $@
+endef
+
+$(BUILD)/rules_builtin.c: rules/youtube.json
+	$(call embed,yt_rules_builtin)
+
+$(BUILD)/cacert.c: $(CACERT)
+	$(call embed,wiitube_cacert_pem)
+
+$(BUILD)/rules_builtin.o $(BUILD)/cacert.o: %.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -rf $(BUILD)
+
+.PHONY: all clean

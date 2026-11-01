@@ -1,0 +1,719 @@
+/* WIITube for the Wii / vWii: search YouTube with an on-screen keyboard, pick a result,
+ * and play it (H.264 + AAC, decoded on the Wii). */
+#include <gccore.h>
+#include <fat.h>
+#include <ogc/lwp_watchdog.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <wiiuse/wpad.h>
+
+#include "../../core/http.h"
+#include "../../core/log.h"
+#include "../../core/media.h"
+#include "../../core/net.h"
+#include "../../core/ring.h"
+#include "../../core/stream.h"
+#include "../../core/vqueue.h"
+#include "../../core/yt.h"
+#include "audio.h"
+#include "gfx.h"
+#include "threading_alt.h"
+#include "wii.h"
+
+#ifndef APP_VERSION
+#define APP_VERSION "0.1"
+#endif
+#define APP_DIR "sd:/apps/wiitube"
+#define RULES_URL "https://raw.githubusercontent.com/BroOFun/wiitube/main/rules/youtube.json"
+#define MAX_RESULTS 20
+#define VIDEO_BUFFER (4u << 20)
+#define AUDIO_BUFFER (1u << 20)
+
+static volatile int g_quit, g_poweroff;
+static int g_quality = 240;
+static int g_sd;
+
+/* ---- input ------------------------------------------------------------------- */
+
+enum {
+    K_UP = 1 << 0, K_DOWN = 1 << 1, K_LEFT = 1 << 2, K_RIGHT = 1 << 3,
+    K_A = 1 << 4, K_B = 1 << 5, K_PLUS = 1 << 6, K_MINUS = 1 << 7,
+    K_HOME = 1 << 8, K_1 = 1 << 9, K_2 = 1 << 10,
+};
+#define K_DIRS (K_UP | K_DOWN | K_LEFT | K_RIGHT)
+
+static u32 map_wpad(u32 b)
+{
+    u32 k = 0;
+    if (b & WPAD_BUTTON_UP) k |= K_UP;
+    if (b & WPAD_BUTTON_DOWN) k |= K_DOWN;
+    if (b & WPAD_BUTTON_LEFT) k |= K_LEFT;
+    if (b & WPAD_BUTTON_RIGHT) k |= K_RIGHT;
+    if (b & WPAD_BUTTON_A) k |= K_A;
+    if (b & WPAD_BUTTON_B) k |= K_B;
+    if (b & WPAD_BUTTON_PLUS) k |= K_PLUS;
+    if (b & WPAD_BUTTON_MINUS) k |= K_MINUS;
+    if (b & WPAD_BUTTON_HOME) k |= K_HOME;
+    if (b & WPAD_BUTTON_1) k |= K_1;
+    if (b & WPAD_BUTTON_2) k |= K_2;
+    return k;
+}
+
+static u32 map_pad(u32 b) /* GameCube controller (original Wii only) */
+{
+    u32 k = 0;
+    if (b & PAD_BUTTON_UP) k |= K_UP;
+    if (b & PAD_BUTTON_DOWN) k |= K_DOWN;
+    if (b & PAD_BUTTON_LEFT) k |= K_LEFT;
+    if (b & PAD_BUTTON_RIGHT) k |= K_RIGHT;
+    if (b & PAD_BUTTON_A) k |= K_A;
+    if (b & PAD_BUTTON_B) k |= K_B;
+    if (b & PAD_BUTTON_START) k |= K_PLUS;
+    if (b & PAD_BUTTON_X) k |= K_1;
+    if (b & PAD_BUTTON_Y) k |= K_2;
+    if (b & PAD_TRIGGER_Z) k |= K_HOME;
+    return k;
+}
+
+/* Buttons pressed this frame, with auto-repeat for a held D-pad. */
+static u32 read_keys(void)
+{
+    static u32 last_dirs, held_frames;
+    u32 down, held, dirs;
+
+    WPAD_ScanPads();
+    PAD_ScanPads();
+    down = map_wpad(WPAD_ButtonsDown(0)) | map_pad(PAD_ButtonsDown(0));
+    held = map_wpad(WPAD_ButtonsHeld(0)) | map_pad(PAD_ButtonsHeld(0));
+    dirs = held & K_DIRS;
+    if (dirs && dirs == last_dirs) {
+        if (++held_frames > 24 && held_frames % 5 == 0)
+            down |= dirs;
+    } else {
+        held_frames = 0;
+    }
+    last_dirs = dirs;
+    return down;
+}
+
+static u32 wait_keys(void)
+{
+    u32 k;
+    do {
+        VIDEO_WaitVSync();
+        k = read_keys();
+    } while (!k && !g_quit);
+    return k;
+}
+
+static void on_reset(u32 irq, void *ctx)
+{
+    (void)irq;
+    (void)ctx;
+    g_quit = 1;
+}
+
+static void on_power(void)
+{
+    g_poweroff = 1;
+    g_quit = 1;
+}
+
+/* ---- text output ------------------------------------------------------------- */
+
+/* The console font is ASCII; turn common UTF-8 into readable ASCII and drop emoji. */
+static const char *translit(unsigned cp)
+{
+    static const char latin1[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYPsaaaaaaaceeeeiiiidnooooo/ouuuuypy";
+    static char one[2];
+    if (cp >= 0xC0 && cp <= 0xFF) {
+        one[0] = latin1[cp - 0xC0];
+        one[1] = 0;
+        return one;
+    }
+    switch (cp) {
+    case 0x2018: case 0x2019: case 0x00B4: return "'";
+    case 0x201C: case 0x201D: return "\"";
+    case 0x2010: case 0x2013: case 0x2014: case 0x00B7: case 0x2022: case 0x2027: return "-";
+    case 0x2026: return "...";
+    case 0x00A0: case 0x2009: case 0x200A: return " ";
+    case 0x00A9: return "(c)";
+    case 0x00AE: return "(R)";
+    case 0x2122: return "TM";
+    }
+    if (cp >= 0x1F000 || (cp >= 0x2600 && cp < 0x2800) || cp == 0xFE0F || cp == 0x200D || cp == 0x200B)
+        return "";
+    return "?";
+}
+
+static void to_ascii(char *dst, size_t dstlen, const char *src)
+{
+    const unsigned char *s = (const unsigned char *)src;
+    size_t o = 0;
+    while (*s && o + 1 < dstlen) {
+        unsigned cp;
+        int more;
+        const char *rep;
+        if (*s < 0x80) {
+            dst[o++] = *s >= 0x20 ? (char)*s : ' ';
+            s++;
+            continue;
+        }
+        if ((*s & 0xE0) == 0xC0) { cp = *s & 0x1F; more = 1; }
+        else if ((*s & 0xF0) == 0xE0) { cp = *s & 0x0F; more = 2; }
+        else if ((*s & 0xF8) == 0xF0) { cp = *s & 0x07; more = 3; }
+        else { s++; continue; }
+        s++;
+        while (more-- > 0 && (*s & 0xC0) == 0x80)
+            cp = (cp << 6) | (*s++ & 0x3F);
+        for (rep = translit(cp); *rep && o + 1 < dstlen; rep++)
+            dst[o++] = *rep;
+    }
+    dst[o] = 0;
+}
+
+static void cls(void) { printf("\x1b[2J\x1b[1;1H"); }
+static void at(int row, int col) { printf("\x1b[%d;%dH", row, col); }
+
+/* Print at most width characters (ASCII-converted), padding with spaces if pad is set. */
+static void print_fit(const char *s, int width, int pad)
+{
+    char buf[512];
+    int n;
+    to_ascii(buf, sizeof buf, s);
+    n = (int)strlen(buf);
+    if (n > width) {
+        if (width > 3) {
+            buf[width - 3] = 0;
+            printf("%s...", buf);
+        } else {
+            buf[width] = 0;
+            printf("%s", buf);
+        }
+        return;
+    }
+    printf("%s", buf);
+    if (pad)
+        printf("%*s", width - n, "");
+}
+
+static void header(const char *right)
+{
+    int cols = gfx_console_cols();
+    cls();
+    printf("\x1b[1m WIITube \x1b[0m v" APP_VERSION);
+    if (right) {
+        at(1, cols - (int)strlen(right));
+        printf("%s", right);
+    }
+    at(3, 1);
+}
+
+static void status_screen(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void status_screen(const char *fmt, ...)
+{
+    char msg[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof msg, fmt, ap);
+    va_end(ap);
+    gfx_show_console();
+    header(NULL);
+    at(10, 3);
+    print_fit(msg, gfx_console_cols() - 4, 0);
+    VIDEO_WaitVSync();
+}
+
+static void error_screen(const char *title, const char *detail)
+{
+    gfx_show_console();
+    header(NULL);
+    at(8, 3);
+    printf("\x1b[31;1m%s\x1b[0m", title);
+    at(10, 3);
+    if (detail) {
+        /* Wrap the detail text over a few lines. */
+        char buf[1024];
+        int cols = gfx_console_cols() - 6, row = 10, len, i = 0;
+        to_ascii(buf, sizeof buf, detail);
+        len = (int)strlen(buf);
+        while (i < len && row < 20) {
+            at(row++, 3);
+            printf("%.*s", cols, buf + i);
+            i += cols;
+        }
+    }
+    at(gfx_console_rows() - 1, 3);
+    printf("Press A to continue.");
+    wlog("error: %s: %s", title, detail ? detail : "");
+    while (!g_quit && !(wait_keys() & (K_A | K_B | K_HOME))) {}
+}
+
+static const char *quality_label(void)
+{
+    static char buf[48];
+    snprintf(buf, sizeof buf, "Quality: %dp (1 to change)", g_quality);
+    return buf;
+}
+
+static void cycle_quality(void)
+{
+    g_quality = g_quality == 144 ? 240 : g_quality == 240 ? 360 : 144;
+}
+
+/* ---- search keyboard ---------------------------------------------------------- */
+
+static const char *const KEY_ROWS[] = { "abcdefghijklm", "nopqrstuvwxyz", "0123456789-'." };
+#define KEY_COLS 13
+static const char *const SPECIAL[] = { "SPACE", "DEL", "SEARCH" };
+
+static void draw_keyboard(const char *query, int row, int col)
+{
+    int r, c;
+    header(quality_label());
+    at(4, 3);
+    printf("Search: \x1b[1m");
+    print_fit(query, gfx_console_cols() - 14, 0);
+    printf("_\x1b[0m");
+    for (r = 0; r < 3; r++) {
+        at(7 + r * 2, 5);
+        for (c = 0; c < KEY_COLS; c++) {
+            int sel = r == row && c == col;
+            printf("%s %c %s ", sel ? "\x1b[7m" : "", KEY_ROWS[r][c], sel ? "\x1b[0m" : "");
+        }
+    }
+    at(14, 5);
+    for (c = 0; c < 3; c++) {
+        int sel = row == 3 && c == col;
+        printf("%s[ %s ]%s   ", sel ? "\x1b[7m" : "", SPECIAL[c], sel ? "\x1b[0m" : "");
+    }
+    at(gfx_console_rows() - 2, 3);
+    printf("D-Pad: move  A: type  B: delete  +: search");
+    at(gfx_console_rows() - 1, 3);
+    printf("1: quality   HOME: exit to Homebrew Channel");
+}
+
+/* Returns 1 with a non-empty query, 0 to quit. */
+static int keyboard_screen(char *query, size_t qlen)
+{
+    static int row, col;
+    int dirty = 1;
+
+    gfx_show_console();
+    while (!g_quit) {
+        u32 k;
+        size_t len = strlen(query);
+        if (dirty)
+            draw_keyboard(query, row, col);
+        dirty = 1;
+        k = wait_keys();
+        if (k & K_HOME)
+            return 0;
+        if (k & K_UP) {
+            if (row == 3)
+                col = col * KEY_COLS / 3 + 2;
+            row = row == 0 ? 3 : row - 1;
+            if (row == 3)
+                col = col * 3 / KEY_COLS;
+        } else if (k & K_DOWN) {
+            if (row == 3)
+                col = col * KEY_COLS / 3 + 2;
+            row = row == 3 ? 0 : row + 1;
+            if (row == 3)
+                col = col * 3 / KEY_COLS;
+        } else if (k & K_LEFT) {
+            int n = row == 3 ? 3 : KEY_COLS;
+            col = (col + n - 1) % n;
+        } else if (k & K_RIGHT) {
+            int n = row == 3 ? 3 : KEY_COLS;
+            col = (col + 1) % n;
+        }
+        if (col >= (row == 3 ? 3 : KEY_COLS))
+            col = (row == 3 ? 2 : KEY_COLS - 1);
+        if (k & K_A) {
+            if (row < 3) {
+                if (len + 1 < qlen) {
+                    query[len] = KEY_ROWS[row][col];
+                    query[len + 1] = 0;
+                }
+            } else if (col == 0) {
+                if (len > 0 && len + 1 < qlen && query[len - 1] != ' ') {
+                    query[len] = ' ';
+                    query[len + 1] = 0;
+                }
+            } else if (col == 1) {
+                if (len > 0)
+                    query[len - 1] = 0;
+            } else if (len > 0) {
+                return 1;
+            }
+        }
+        if ((k & K_B) && len > 0)
+            query[len - 1] = 0;
+        if ((k & K_PLUS) && len > 0)
+            return 1;
+        if (k & K_1)
+            cycle_quality();
+    }
+    return 0;
+}
+
+/* ---- results list -------------------------------------------------------------- */
+
+#define PAGE 10
+
+static void draw_results(const char *query, const yt_search_result *res, int n, int sel)
+{
+    int cols = gfx_console_cols(), top = sel / PAGE * PAGE, i;
+    char head[64];
+    snprintf(head, sizeof head, "%d/%d", sel + 1, n);
+    header(head);
+    at(2, 2);
+    printf("Results for \"");
+    print_fit(query, cols - 30, 0);
+    printf("\"");
+    for (i = top; i < n && i < top + PAGE; i++) {
+        const yt_search_result *r = &res[i];
+        char meta[256];
+        int row = 4 + (i - top) * 2;
+        at(row, 2);
+        printf("%s", i == sel ? "\x1b[7m>" : " ");
+        print_fit(r->title, cols - 4, 1);
+        printf("%s", i == sel ? "\x1b[0m" : "");
+        snprintf(meta, sizeof meta, "%s%s%s%s%s", r->channel, r->duration[0] ? "  -  " : "", r->duration,
+                 r->views[0] ? "  -  " : "", r->views);
+        at(row + 1, 4);
+        printf("\x1b[36m");
+        print_fit(meta, cols - 6, 0);
+        printf("\x1b[0m");
+    }
+    at(gfx_console_rows() - 1, 2);
+    printf("A: play  B: new search  1: %dp  HOME: exit", g_quality);
+}
+
+/* Returns the chosen index, -1 for a new search, -2 to quit. */
+static int results_screen(const char *query, const yt_search_result *res, int n, int *sel)
+{
+    gfx_show_console();
+    for (;;) {
+        u32 k;
+        draw_results(query, res, n, *sel);
+        k = wait_keys();
+        if (g_quit || (k & K_HOME))
+            return -2;
+        if (k & K_B)
+            return -1;
+        if (k & K_A)
+            return *sel;
+        if (k & K_UP)
+            *sel = (*sel + n - 1) % n;
+        if (k & K_DOWN)
+            *sel = (*sel + 1) % n;
+        if (k & K_LEFT)
+            *sel = *sel >= PAGE ? *sel - PAGE : 0;
+        if (k & K_RIGHT)
+            *sel = *sel + PAGE < n ? *sel + PAGE : n - 1;
+        if (k & K_1)
+            cycle_quality();
+    }
+}
+
+/* ---- playback --------------------------------------------------------------------- */
+
+typedef struct {
+    int use_audio;
+    u64 start;    /* wall clock start (no-audio fallback) */
+    int started;
+} play_clock;
+
+static double clock_now(void *ud)
+{
+    play_clock *c = ud;
+    if (c->use_audio)
+        return audio_clock();
+    if (!c->started)
+        return -1;
+    return (double)ticks_to_microsecs(gettime() - c->start) / 1e6;
+}
+
+static void flush_texture(void *tex, size_t len) { DCFlushRange(tex, (u32)len); }
+
+static int16_t g_pcm[8192 * 2];
+
+/* Decode audio into the output buffer while that won't block for long on the network. */
+static int feed_audio(media *ma, ring *ar)
+{
+    while (audio_space() >= 8192 && (ring_available(ar) >= 32768 || ring_done(ar))) {
+        int frames = 0;
+        double pts = 0;
+        int rc = media_next_audio(ma, g_pcm, 8192, &frames, &pts);
+        if (rc <= 0)
+            return 0; /* end of audio */
+        audio_push(g_pcm, frames, pts);
+    }
+    return 1;
+}
+
+static void play_video(const yt_search_result *r)
+{
+    yt_video v;
+    const yt_format *vf = NULL, *af = NULL;
+    yt_stream *vs = NULL, *as = NULL;
+    media *mv = NULL, *ma = NULL;
+    vqueue *q = NULL;
+    play_clock clk = { 0, 0, 0 };
+    char err[512] = "", serr[256];
+    int audio_live = 0, paused = 0, overlay = 180, volume = 255, cancelled = 0;
+    gfx_overlay ov;
+    vq_stats st;
+    u64 t_start;
+
+    status_screen("Loading \"%s\"...", r->title);
+    if (yt_get_video(r->video_id, &v, err, sizeof err) != 0) {
+        error_screen("Could not load this video.", err);
+        return;
+    }
+    if (yt_pick_formats(&v, g_quality, &vf, &af) != 0) {
+        snprintf(err, sizeof err, "No H.264 stream at %dp or lower for this video.", g_quality);
+        error_screen("Can't play this video.", err);
+        goto out;
+    }
+    if (!af)
+        af = vf; /* muxed stream: read the same URL twice (video + audio) */
+    wlog("play %s via %s: video itag %d %dx%d %s, audio itag %d %s", v.video_id, v.client, vf->itag, vf->width,
+         vf->height, vf->codecs, af->itag, af->codecs);
+
+    status_screen("Buffering...");
+    vs = yt_stream_start(&v, vf, VIDEO_BUFFER);
+    as = yt_stream_start(&v, af, AUDIO_BUFFER);
+    if (!vs || !as) {
+        error_screen("Out of memory.", NULL);
+        goto out;
+    }
+    mv = media_open(yt_stream_ring(vs), MEDIA_VIDEO, err, sizeof err);
+    if (!mv) {
+        yt_stream_error(vs, serr, sizeof serr);
+        error_screen("Could not start the video.", serr[0] ? serr : err);
+        goto out;
+    }
+    ma = media_open(yt_stream_ring(as), MEDIA_AUDIO, err, sizeof err);
+    if (!ma)
+        wlog("no audio: %s", err); /* play silently rather than not at all */
+    audio_reset(ma ? media_sample_rate(ma) : 44100);
+    clk.use_audio = ma != NULL;
+    audio_live = ma != NULL;
+
+    q = vq_start(mv, clock_now, &clk, flush_texture, 0);
+    if (!q) {
+        error_screen("Out of memory.", NULL);
+        goto out;
+    }
+    gfx_video_begin(vq_frame_width(q), vq_frame_height(q), vq_tex_width(q), vq_tex_height(q));
+
+    /* Wait for the first picture and some sound. */
+    t_start = gettime();
+    while (!g_quit && !vq_finished(q) && (vq_ready(q) == 0 || (audio_live && audio_buffered() < 22050))) {
+        if (audio_live)
+            audio_live = feed_audio(ma, yt_stream_ring(as));
+        VIDEO_WaitVSync();
+        if (read_keys() & (K_B | K_HOME)) {
+            cancelled = 1;
+            break;
+        }
+        if (ticks_to_millisecs(gettime() - t_start) > 30000) {
+            yt_stream_error(vs, serr, sizeof serr);
+            error_screen("The video did not start.", serr[0] ? serr : "Timed out waiting for data.");
+            cancelled = 1;
+            break;
+        }
+    }
+    if (cancelled || g_quit)
+        goto out;
+
+    if (clk.use_audio)
+        audio_play();
+    clk.start = gettime();
+    clk.started = 1;
+
+    for (;;) {
+        u32 k = read_keys();
+        double now;
+        const uint16_t *tex;
+
+        if (g_quit || (k & (K_B | K_HOME)))
+            break;
+        if (k & (K_A | K_2)) {
+            paused = !paused;
+            audio_pause(paused);
+            overlay = 180;
+        }
+        if (k & (K_PLUS | K_MINUS)) {
+            volume += (k & K_PLUS) ? 32 : -32;
+            volume = volume < 0 ? 0 : volume > 255 ? 255 : volume;
+            audio_set_volume(volume);
+            overlay = 120;
+        }
+        if (k & (K_DIRS | K_1))
+            overlay = 180;
+
+        if (audio_live && !paused)
+            audio_live = feed_audio(ma, yt_stream_ring(as));
+        now = clock_now(&clk); /* the audio clock stands still while paused */
+        if (!paused && vq_poll(q, now, &tex))
+            gfx_video_set_texture(tex);
+
+        ov.paused = paused;
+        ov.visible = overlay > 0;
+        if (overlay > 0)
+            overlay--;
+        ov.progress = v.length_seconds > 0 && now > 0 ? (float)(now / v.length_seconds) : 0;
+        ov.buffered = vf->content_length > 0 ? (float)yt_stream_received(vs) / (float)vf->content_length : 0;
+        if (ov.progress > 1)
+            ov.progress = 1;
+        if (ov.buffered > 1)
+            ov.buffered = 1;
+        gfx_video_present(&ov); /* waits for the next vertical blank */
+
+        if (!paused && vq_finished(q) && (!clk.use_audio || (!audio_live && audio_buffered() == 0)))
+            break;
+    }
+
+out:
+    audio_stop();
+    if (vs)
+        ring_abort(yt_stream_ring(vs)); /* unblock the decoder if it waits for data */
+    if (as)
+        ring_abort(yt_stream_ring(as));
+    if (q) {
+        vq_get_stats(q, &st);
+        wlog("played %s: decoded %d, shown %d, dropped %d, audio underruns %d", v.video_id, st.decoded, st.shown,
+             st.late_drops, audio_underruns());
+        vq_stop(q);
+    }
+    gfx_video_end();
+    media_close(mv);
+    media_close(ma);
+    if (vs) {
+        yt_stream_error(vs, serr, sizeof serr);
+        if (serr[0])
+            wlog("video stream: %s", serr);
+    }
+    yt_stream_stop(vs, 3000);
+    yt_stream_stop(as, 3000);
+    yt_video_free(&v);
+    gfx_show_console();
+}
+
+/* ---- startup ----------------------------------------------------------------------- */
+
+/* Use the newest rules from GitHub when reachable (saved to SD), else the SD copy, else
+ * the built-in copy. */
+static void load_rules(void)
+{
+    http_request req;
+    http_response resp;
+    char err[256];
+
+    memset(&req, 0, sizeof req);
+    req.url = RULES_URL;
+    req.headers = "User-Agent: WIITube/" APP_VERSION "\r\n";
+    req.max_buffer = 256 * 1024;
+    if (http_do(&req, &resp, err, sizeof err) == 0 && resp.status == 200 && resp.body &&
+        yt_load_rules_json((const char *)resp.body, "GitHub", err, sizeof err) == 0) {
+        if (g_sd) {
+            FILE *f = fopen(APP_DIR "/rules.json", "wb");
+            if (f) {
+                fwrite(resp.body, 1, resp.body_len, f);
+                fclose(f);
+            }
+        }
+    } else {
+        wlog("rules: GitHub copy unavailable (%s, HTTP %d)", err, resp.status);
+        yt_load_rules(g_sd ? APP_DIR "/rules.json" : NULL, err, sizeof err);
+    }
+    http_response_free(&resp);
+    wlog("rules: using %s", yt_rules_source());
+}
+
+static void quit(void)
+{
+    wlog("exiting");
+    wlog_close();
+    if (g_poweroff)
+        SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+    exit(0);
+}
+
+int main(int argc, char **argv)
+{
+    static yt_search_result results[MAX_RESULTS];
+    char query[64] = "";
+    char err[512];
+    int rc, n = 0, sel = 0;
+    (void)argc;
+    (void)argv;
+
+    gfx_init();
+    WPAD_Init();
+    PAD_Init();
+    audio_init();
+    SYS_SetResetCallback(on_reset);
+    SYS_SetPowerCallback(on_power);
+
+    wlog_quiet(1);
+    g_sd = fatInitDefault();
+    if (g_sd) {
+        mkdir("sd:/apps", 0777);
+        mkdir(APP_DIR, 0777);
+        wlog_open(APP_DIR "/wiitube.log");
+    } else {
+        wlog_open(NULL);
+    }
+    wlog("WIITube " APP_VERSION " starting (SD card %s, %s TV)", g_sd ? "found" : "missing",
+         gfx_widescreen() ? "16:9" : "4:3");
+    wii_mbedtls_threading_init();
+
+    status_screen("Connecting to the internet...");
+    rc = plat_net_init();
+    if (rc < 0) {
+        snprintf(err, sizeof err, "Network error %d. Check that the Wii is connected (Wii Settings > Internet).", rc);
+        error_screen("Could not connect to the internet.", err);
+        quit();
+    }
+    wlog("network up, IP %s", wii_net_ip());
+    status_screen("Connected (%s). Loading certificates...", wii_net_ip());
+    if (http_global_init(err, sizeof err) != 0) {
+        error_screen("Secure connection setup failed.", err);
+        quit();
+    }
+    status_screen("Checking for YouTube updates...");
+    load_rules();
+
+    while (!g_quit) {
+        if (!keyboard_screen(query, sizeof query))
+            break;
+        status_screen("Searching for \"%s\"...", query);
+        n = yt_search(query, results, MAX_RESULTS, err, sizeof err);
+        if (n <= 0) {
+            error_screen(n < 0 ? "Search failed." : "No results.", n < 0 ? err : NULL);
+            continue;
+        }
+        sel = 0;
+        for (;;) {
+            int choice = results_screen(query, results, n, &sel);
+            if (choice == -2) {
+                quit();
+            }
+            if (choice < 0)
+                break;
+            play_video(&results[choice]);
+            if (g_quit)
+                break;
+        }
+    }
+    quit();
+    return 0;
+}

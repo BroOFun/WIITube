@@ -13,7 +13,15 @@ low-resolution H.264 (144p–360p, ≤30fps). Read this file fully before workin
     `&range=` 10 MiB chunks (same as yt-dlp).
   - `net.h`: platform layer (sockets, entropy, CA bundle path, proxy).
   - `wiitube_mbedtls_user.h`: mbedTLS config tweaks (entropy via `plat_entropy`).
-- `src/platform/linux/`: Linux `net.h`. `src/platform/wii/`: TODO (libogc `net_*`).
+  - `ring.c` (blocking byte buffer), `stream.c` (download thread -> ring), `media.c` (FFmpeg
+    demux/decode of non-seekable fMP4 from a ring), `convert.c` (YUV420 -> GX tiled RGB565),
+    `vqueue.c` (decode thread + 3 texture slots + adaptive frame skipping), `thread.h`, `log.c`.
+- `src/platform/linux/`: desktop `net.h` + pthreads.
+- `src/platform/wii/`: Wii app. `main.c` (keyboard search, results, player loop), `gfx.c`
+  (console menus + GX video quad + progress bar), `audio.c` (ASND double-buffered voice,
+  lock-free ring, clock from block start ticks), `net_wii.c` (if_config, net_*, 8 KiB I/O cap,
+  IOS-timing entropy, built-in CA), `thread_wii.c` (LWP + mbedTLS THREADING_ALT).
+  Platform functions are named `plat_*` because libogc already owns `net_*`.
 - `src/cli/main.c`: `wiitube-cli` test harness (`fetch`, `search`, `info`, `get`).
 - `rules/youtube.json`: **client identities and endpoints, kept out of the C code** so
   fixes are mostly data changes. Embedded at build time as the fallback; the Wii app
@@ -31,6 +39,20 @@ sh deps/fetch.sh && make
 ./wiitube-cli get dQw4w9WgXcQ -q 240     # writes <id>.video.mp4 + <id>.audio.m4a
 ```
 Sanitizer build: `make clean && make CFLAGS="-O1 -g -fsanitize=address,undefined" LIBS="-lz -fsanitize=address,undefined"`.
+Player pipeline test (needs `libavformat-dev libavcodec-dev libavutil-dev` + ffmpeg CLI):
+`make test-media` (YouTube-shaped clips through ring -> FFmpeg -> conversion -> vqueue).
+
+## Wii build
+Only in CI: `.github/workflows/wii-build.yml` runs in the `devkitpro/devkitppc` container,
+builds FFmpeg (`deps/build_ffmpeg_wii.sh`, cached) and `make -f Makefile.wii`, then
+force-pushes `status.txt`, `build.log`, `ffmpeg.log`, `diagnostics.txt` and
+`WIITube-wii.zip` to the **`ci-build`** branch
+(`git fetch origin ci-build && git show FETCH_HEAD:status.txt`). Users download
+`https://github.com/BroOFun/wiitube/raw/ci-build/WIITube-wii.zip`.
+Running downloaded toolchains in the dev container is blocked by the session's safety
+policy, so syntax-check Wii code locally against cloned libogc headers instead:
+`gcc -fsyntax-only -std=gnu99 -DGEKKO -DHW_RVL -DWIITUBE_PLATFORM_WII ... -I<libogc>/gc`.
+On the Wii the app logs to `sd:/apps/wiitube/wiitube.log` — ask the user for it.
 
 ## Live test on GitHub Actions
 `.github/workflows/youtube-test.yml` runs `tests/youtube_smoke.sh` (search, info, 240p get,

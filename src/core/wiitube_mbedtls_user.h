@@ -9,9 +9,17 @@
 #ifdef WIITUBE_PLATFORM_WII
 /* No /dev/urandom or getrandom() on the Wii. */
 #define MBEDTLS_NO_PLATFORM_ENTROPY
-/* No POSIX timing API; mbedTLS falls back to its portable code. */
+/* No POSIX timing or BSD socket API in mbedTLS's sense; we bring our own I/O. */
 #undef MBEDTLS_TIMING_C
 #undef MBEDTLS_NET_C
+/* Certificates are built in, so no file access (and no PSA key storage on files). */
+#undef MBEDTLS_FS_IO
+#undef MBEDTLS_PSA_ITS_FILE_C
+#undef MBEDTLS_PSA_CRYPTO_STORAGE_C
+/* Video and audio download at the same time, each with its own TLS connection; the shared
+ * RNG and PSA key store need locking. Mutexes come from libogc (see thread_wii.c). */
+#define MBEDTLS_THREADING_C
+#define MBEDTLS_THREADING_ALT
 #endif
 
 /* Not needed by an HTTPS client; trims code size. */
