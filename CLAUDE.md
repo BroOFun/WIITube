@@ -61,15 +61,21 @@ The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cl
 
 ## Status (2026-11-01)
 - Done: HTTPS stack verified (TLS + certificate checks, gzip, chunked, 5 MB download
-  byte-exact, ASan/UBSan clean); YouTube search/player/format/download code written.
-- **NOT yet tested against YouTube**: the session's network policy blocked
-  `www.youtube.com`, `*.googlevideo.com`, `i.ytimg.com`. Also, YouTube often blocks cloud
-  IPs, so the real test may need the owner's home connection.
-- devkitPro package hosts (`pkg.devkitpro.org`) and `dl.dolphin-emu.org` were blocked too,
-  so no Wii toolchain or Dolphin yet.
+  byte-exact, ASan/UBSan clean).
+- **YouTube verified end-to-end on GitHub Actions (commit 50f7524)**: search returned 20
+  results; `visionos` player returned direct URLs for every format (H.264 144p–1080p, VP9,
+  AV1, AAC 139/140, Opus); 240p H.264 (itag 133) + AAC downloaded; ffprobe confirmed
+  h264 426x240 and aac 44.1 kHz.
+- Findings: visionos returned **no muxed formats** (no itag 18), so the Wii player must play
+  separate video + audio streams. The picker currently takes the lowest-bitrate AAC, which
+  is itag 139 (HE-AAC, `mp4a.40.5`); AAC-LC (`mp4a.40.2`, itag 140) is cheaper to decode
+  and may suit the Wii better.
+- This dev container's network policy blocks YouTube, `pkg.devkitpro.org` and
+  `dl.dolphin-emu.org`. Use the Actions test for live checks. A Wii build could also run in
+  Actions with the `devkitpro/devkitppc` Docker image.
 
 ## Roadmap
-1. Verify search/info/get against real YouTube (needs network access).
+1. ~~Verify search/info/get against real YouTube~~ (done 2026-11-01 via Actions).
 2. Wii port: `Makefile.wii` (devkitPPC/libogc), `src/platform/wii/net_wii.c`, SD-card CA
    bundle, entropy source, fit in 88 MB RAM.
 3. Player: FFmpeg H.264 + AAC decode (WiiMC proved FFmpeg runs on Wii), YUV→RGB and
