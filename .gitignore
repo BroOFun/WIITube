@@ -1,0 +1,6 @@
+/build/
+/deps/src/
+/wiitube-cli
+*.mp4
+*.m4a
+*.o

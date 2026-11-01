@@ -1,0 +1,41 @@
+{
+  "rules_version": 1,
+  "updated": "2026-11-01",
+  "source": "yt-dlp 2026.10.26, yt_dlp/extractor/youtube/_base.py INNERTUBE_CLIENTS",
+  "api_host": "www.youtube.com",
+  "search": {
+    "client": "web",
+    "params": "EgIQAfABAQ=="
+  },
+  "player_clients": ["visionos", "tv_samsung"],
+  "clients": {
+    "web": {
+      "clientName": "WEB",
+      "clientVersion": "2.20260708.00.00",
+      "clientNameId": 1,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+    },
+    "visionos": {
+      "clientName": "VISIONOS",
+      "clientVersion": "1.02",
+      "clientNameId": 101,
+      "deviceMake": "Apple",
+      "deviceModel": "RealityDevice17,1",
+      "osName": "visionOS",
+      "osVersion": "26.5.23O471",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+      "requiresJs": false
+    },
+    "tv_samsung": {
+      "clientName": "TVHTML5",
+      "clientVersion": "5.20260707",
+      "clientNameId": 7,
+      "deviceMake": "Samsung",
+      "deviceModel": "UKS9800",
+      "osName": "Tizen",
+      "osVersion": "2.4.0",
+      "userAgent": "Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1",
+      "requiresJs": true
+    }
+  }
+}
