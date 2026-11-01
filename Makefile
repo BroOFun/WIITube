@@ -79,6 +79,20 @@ $(BUILD)/test_thumbs: $(TEST_THUMBS_SRCS) $(BUILD)/libmbedtls.a $(wildcard src/c
 test-thumbs: $(BUILD)/test_thumbs
 	sh tests/run_thumbs_test.sh $(BUILD)
 
+# Screenshots of the Wii UI rendered in software: make ui-preview (PNGs in build/linux/preview)
+UI_PREVIEW_SRCS := tests/ui_preview.c src/ui/screens.c src/ui/ui_common.c src/ui/atlas_data.c \
+                   src/platform/linux/soft_draw.c src/platform/wii/logo_data.c src/core/image.c src/core/convert.c
+
+$(BUILD)/ui_preview: $(UI_PREVIEW_SRCS) $(wildcard src/ui/*.h src/core/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(APP_FLAGS) -Ithird_party/stb -o $@ $(UI_PREVIEW_SRCS)
+
+ui-preview: $(BUILD)/ui_preview
+	python3 -I tests/make_preview_thumbs.py $(BUILD)/preview-thumbs
+	mkdir -p $(BUILD)/preview
+	$(BUILD)/ui_preview $(BUILD)/preview-thumbs $(BUILD)/preview
+	python3 -I tests/ppm2png.py $(BUILD)/preview
+
 test: test-media test-thumbs
 
 test-media: $(BUILD)/test_media
@@ -88,4 +102,4 @@ test-media: $(BUILD)/test_media
 clean:
 	rm -rf build wiitube-cli
 
-.PHONY: all clean test test-media test-thumbs
+.PHONY: all clean test test-media test-thumbs ui-preview

@@ -283,6 +283,7 @@ static int add_result(const cJSON *item, yt_search_result *out, int n, int max)
             jtext(jpath(vr, "longBylineText"), r->channel, sizeof r->channel);
         jtext(jpath(vr, "lengthText"), r->duration, sizeof r->duration);
         jtext(jpath(vr, "shortViewCountText"), r->views, sizeof r->views);
+        jtext(jpath(vr, "publishedTimeText"), r->published, sizeof r->published);
         return n + 1;
     }
     if (lvm && jstr(lvm, "contentId")) {

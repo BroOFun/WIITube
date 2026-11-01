@@ -11,6 +11,7 @@ typedef struct {
     char channel[128];
     char duration[16]; /* "4:13" as shown by YouTube; empty for live */
     char views[48];
+    char published[32]; /* "5 months ago" */
 } yt_search_result;
 
 typedef struct {
