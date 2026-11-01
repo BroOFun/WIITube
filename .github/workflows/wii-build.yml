@@ -75,9 +75,18 @@ jobs:
           [ -f ffmpeg.log ] && tail -c 200000 ffmpeg.log > /tmp/out/ffmpeg.log
           [ -f build.log ] && tail -c 300000 build.log > /tmp/out/build.log
           grep -E "error|warning" build.log 2>/dev/null | head -300 > /tmp/out/diagnostics.txt || true
-          if [ -f build/wii/WiiTube.zip ]; then
+          if [ -f build/wii/WiiTube.zip ] && [ "${{ steps.app.outcome }}" = success ]; then
             cp build/wii/WiiTube.zip /tmp/out/
             ls -l build/wii/boot.dol >> /tmp/out/status.txt
+            echo "${GITHUB_SHA::7}" > /tmp/out/zip_commit.txt
+          else
+            # Keep the last working download in place when a build fails.
+            git config --global --add safe.directory "$GITHUB_WORKSPACE" 2>/dev/null || true
+            if git fetch -q origin ci-build 2>/dev/null; then
+              git show FETCH_HEAD:WiiTube.zip > /tmp/out/WiiTube.zip 2>/dev/null || rm -f /tmp/out/WiiTube.zip
+              git show FETCH_HEAD:zip_commit.txt > /tmp/out/zip_commit.txt 2>/dev/null || true
+            fi
+            echo "zip:     kept from the previous successful build ($(cat /tmp/out/zip_commit.txt 2>/dev/null || echo unknown))" >> /tmp/out/status.txt
           fi
           cat /tmp/out/status.txt
           cd /tmp/out
