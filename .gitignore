@@ -4,3 +4,4 @@
 *.mp4
 *.m4a
 *.o
+/test-output/

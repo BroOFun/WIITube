@@ -1,0 +1,72 @@
+# Builds the desktop prototype and runs the live YouTube check on GitHub's servers.
+# Runs on code changes, daily (to notice when YouTube breaks something), and on demand
+# from the Actions tab ("Run workflow").
+# Results: the run log, the "test-video" artifact, and results.txt on the ci-results branch.
+name: YouTube test
+
+on:
+  workflow_dispatch:
+    inputs:
+      video:
+        description: Video ID or URL to test
+        default: dQw4w9WgXcQ
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'rules/**'
+      - 'deps/**'
+      - 'tests/**'
+      - 'Makefile'
+      - '.github/workflows/youtube-test.yml'
+  schedule:
+    - cron: '17 9 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zlib1g-dev ffmpeg
+
+      - name: Build
+        run: sh deps/fetch.sh && make
+
+      - name: Test against YouTube
+        id: smoke
+        continue-on-error: true
+        env:
+          VIDEO: ${{ github.event.inputs.video || 'dQw4w9WgXcQ' }}
+        run: |
+          set -o pipefail
+          sh tests/youtube_smoke.sh "$VIDEO" 2>&1 | tee results.txt
+
+      - name: Upload downloaded video
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-video
+          path: test-output/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Publish results.txt to the ci-results branch
+        if: always()
+        run: |
+          mkdir /tmp/ci && cp results.txt /tmp/ci/ && cd /tmp/ci
+          git init -q -b ci-results
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results.txt
+          git commit -q -m "Results for ${GITHUB_SHA::7} (${{ github.event_name }})"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" ci-results
+
+      - name: Fail the run if the YouTube test failed
+        if: steps.smoke.outcome == 'failure'
+        run: exit 1
