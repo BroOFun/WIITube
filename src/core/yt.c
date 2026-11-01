@@ -591,13 +591,20 @@ static int reels_page(yt_feed *f, const char *seed_id, char *err, size_t errlen)
     return 0;
 }
 
-int yt_feed_start(yt_feed *f, const char *query, int kind, char *err, size_t errlen)
+int yt_feed_start(yt_feed *f, const char *query_in, int kind, char *err, size_t errlen)
 {
     cJSON *body, *resp;
     const char *client_key;
+    char query[sizeof f->query];
+    /* Copy first: callers may pass f->query itself, which yt_feed_free clears. */
+    copy_str(query, sizeof query, query_in ? query_in : "");
     yt_feed_free(f);
     f->kind = kind;
     copy_str(f->query, sizeof f->query, query);
+    if (!query[0]) {
+        snprintf(err, errlen, "nothing to search for");
+        return -1;
+    }
     if (ensure_rules(err, errlen) != 0)
         return -1;
     if (kind == YT_FEED_RELATED || kind == YT_FEED_REELS)

@@ -107,6 +107,18 @@ $(BUILD)/ui_live: $(UI_LIVE_SRCS) $(BUILD)/libmbedtls.a $(BUILD)/rules_builtin.o
 	$(CC) $(CFLAGS) $(APP_FLAGS) $(MBED_DEF) $(INCS) -Ithird_party/stb -o $@ $(UI_LIVE_SRCS) \
 	    $(BUILD)/rules_builtin.o $(BUILD)/libmbedtls.a -lz -lpthread
 
+# The app's browse flow against real YouTube (used in CI): build/linux/app_sim OUTDIR
+APP_SIM_SRCS := tests/app_sim.c src/app/pages.c src/ui/browse.c src/ui/keyboard.c src/ui/player_ui.c \
+                src/ui/ui_common.c src/ui/atlas_data.c src/platform/linux/soft_draw.c src/platform/wii/logo_data.c \
+                src/core/image.c src/core/convert.c src/core/yuv_tev.c src/core/thumbs.c src/core/http.c src/core/yt.c \
+                src/core/feed.c src/core/seekidx.c src/core/log.c src/platform/linux/net_linux.c \
+                src/platform/linux/thread_posix.c third_party/cJSON/cJSON.c
+
+$(BUILD)/app_sim: $(APP_SIM_SRCS) $(BUILD)/libmbedtls.a $(BUILD)/rules_builtin.o $(wildcard src/ui/*.h src/core/*.h src/app/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(APP_FLAGS) $(MBED_DEF) $(INCS) -Ithird_party/stb -o $@ $(APP_SIM_SRCS) \
+	    $(BUILD)/rules_builtin.o $(BUILD)/libmbedtls.a -lz -lpthread
+
 $(BUILD)/test_yuv_tev: tests/test_yuv_tev.c src/core/yuv_tev.c src/core/yuv_tev.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(APP_FLAGS) -o $@ tests/test_yuv_tev.c src/core/yuv_tev.c -lm

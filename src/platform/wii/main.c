@@ -18,6 +18,7 @@
 #include "../../core/thumbs.h"
 #include "../../core/yt.h"
 #include "../../ui/ui.h"
+#include "../../app/pages.h"
 #include "app.h"
 #include "audio.h"
 #include "gfx.h"
@@ -25,7 +26,7 @@
 #include "wii.h"
 
 #ifndef APP_VERSION
-#define APP_VERSION "0.6"
+#define APP_VERSION "0.6.1"
 #endif
 #define RULES_URL "https://raw.githubusercontent.com/BroOFun/wiitube/main/rules/youtube.json"
 #define THUMB_URL "https://i.ytimg.com/vi/%s/mqdefault.jpg"
@@ -297,199 +298,14 @@ static void *startup_main(void *arg)
     return NULL;
 }
 
-/* ---- watch history (for "For you" and the Shorts feed) ---------------------------------- */
-
-#define HISTORY_MAX 40
-#define FOR_YOU_SEEDS 8
-
-static struct {
-    char id[16];
-    int is_short;
-} g_history[HISTORY_MAX];
-static int g_nhistory;
-
-static void history_load(void)
-{
-    FILE *f;
-    char line[64];
-    if (!g_sd || !(f = fopen(APP_DIR "/history.txt", "r")))
-        return;
-    while (g_nhistory < HISTORY_MAX && fgets(line, sizeof line, f)) {
-        char kind, id[16];
-        if (sscanf(line, "%c %15s", &kind, id) == 2 && (kind == 'v' || kind == 's') && strlen(id) == 11) {
-            snprintf(g_history[g_nhistory].id, sizeof g_history[g_nhistory].id, "%s", id);
-            g_history[g_nhistory].is_short = kind == 's';
-            g_nhistory++;
-        }
-    }
-    fclose(f);
-}
-
-void history_add(const char *id, int is_short)
-{
-    int i, j;
-    FILE *f;
-    for (i = 0; i < g_nhistory; i++) /* move to the front if already there */
-        if (strcmp(g_history[i].id, id) == 0)
-            break;
-    if (i == g_nhistory && g_nhistory < HISTORY_MAX)
-        g_nhistory++;
-    if (i >= HISTORY_MAX)
-        i = HISTORY_MAX - 1;
-    for (j = i; j > 0; j--)
-        g_history[j] = g_history[j - 1];
-    snprintf(g_history[0].id, sizeof g_history[0].id, "%s", id);
-    g_history[0].is_short = is_short;
-    if (g_sd && (f = fopen(APP_DIR "/history.txt", "w"))) {
-        for (i = 0; i < g_nhistory; i++)
-            fprintf(f, "%c %s\n", g_history[i].is_short ? 's' : 'v', g_history[i].id);
-        fclose(f);
-    }
-}
-
-/* The most recently watched Short (to continue the Shorts feed from), or NULL. */
-const char *history_last_short(void)
-{
-    int i;
-    for (i = 0; i < g_nhistory; i++)
-        if (g_history[i].is_short)
-            return g_history[i].id;
-    return NULL;
-}
-
-/* Recently watched videos, newest first, space separated (YouTube recommends from them). */
-static int history_seeds(char *out, size_t outlen)
-{
-    int i, n = 0;
-    out[0] = 0;
-    for (i = 0; i < g_nhistory && n < FOR_YOU_SEEDS; i++) {
-        size_t len = strlen(out);
-        if (g_history[i].is_short || len + 13 >= outlen)
-            continue;
-        snprintf(out + len, outlen - len, "%s%s", n ? " " : "", g_history[i].id);
-        n++;
-    }
-    return n;
-}
-
-/* ---- page loading -----------------------------------------------------------------------
- * One job slot. A job fills its own yt_feed with one page; the main thread merges it into
- * the page's list, so the UI never sees a list that is being changed. */
-
-typedef struct {
-    job j;
-    int page, gen, first;
-    yt_feed result;
-    int rc;
-    char err[256];
-} feed_job;
-
-static feed_job g_feed_job;
 static browse_state g_browse;
-
-static void *feed_main(void *arg)
-{
-    feed_job *fj = arg;
-    if (fj->first)
-        fj->rc = yt_feed_start(&fj->result, fj->result.query, fj->result.kind, fj->err, sizeof fj->err);
-    else
-        fj->rc = yt_feed_more(&fj->result, fj->err, sizeof fj->err);
-    fj->j.done = 1;
-    return NULL;
-}
-
-/* What a page shows: Home = the chip (For you = recommendations for what was watched, or
- * a topic searched like on YouTube), Search = the query. */
-static void page_source(browse_state *b, int page, yt_feed *list)
-{
-    browse_page *pg = &b->pages[page];
-    const char *topic = page == PAGE_HOME ? browse_chip_topic(b, pg->chip) : NULL;
-    if (page == PAGE_SEARCH) {
-        list->kind = YT_FEED_ALL;
-        snprintf(list->query, sizeof list->query, "%s", pg->query);
-    } else if (!topic && history_seeds(list->query, sizeof list->query) > 0) {
-        list->kind = YT_FEED_RELATED;
-    } else {
-        list->kind = YT_FEED_ALL;
-        snprintf(list->query, sizeof list->query, "%s", topic ? topic : ui_topics[0]);
-    }
-}
-
-static void feed_start(browse_state *b, int page)
-{
-    browse_page *pg = &b->pages[page];
-    feed_job *fj = &g_feed_job;
-    const int first = !pg->started;
-
-    if (fj->j.thread)
-        return; /* busy; try again next frame */
-    memset(&fj->result, 0, sizeof fj->result);
-    if (first) {
-        page_source(b, page, &pg->feed);
-        fj->result.kind = pg->feed.kind;
-        snprintf(fj->result.query, sizeof fj->result.query, "%s", pg->feed.query);
-    } else if (!pg->feed.continuation || yt_feed_cursor(&fj->result, &pg->feed) != 0) {
-        return;
-    }
-    fj->page = page;
-    fj->gen = pg->gen;
-    fj->first = first;
-    fj->err[0] = 0;
-    if (job_start(&fj->j, feed_main, fj) != 0) {
-        yt_feed_free(&fj->result);
-        return;
-    }
-    pg->started = 1;
-    pg->loading = 1;
-}
-
-static void feed_collect(browse_state *b)
-{
-    feed_job *fj = &g_feed_job;
-    browse_page *pg;
-    int added;
-    if (!job_collect(&fj->j))
-        return;
-    pg = &b->pages[fj->page];
-    if (fj->gen != pg->gen) { /* the page was reset meanwhile */
-        yt_feed_free(&fj->result);
-        return;
-    }
-    pg->loading = 0;
-    if (fj->rc < 0) {
-        wlog("load \"%s\" (kind %d) failed: %s", fj->result.query, fj->result.kind, fj->err);
-        if (fj->first)
-            pg->started = 0; /* so "try again" starts over */
-        pg->failed = 1;
-        snprintf(pg->status, sizeof pg->status, "Couldn't load videos: %s", fj->err);
-        yt_feed_free(&fj->result);
-        return;
-    }
-    added = yt_feed_merge(&pg->feed, &fj->result);
-    wlog("loaded %d entries for \"%s\" (now %d, %d Shorts in %d shelves)%s", added, pg->feed.query, pg->feed.n,
-         pg->feed.nshorts, pg->feed.nshelves, pg->feed.continuation ? "" : ", end of list");
-    if (added == 0 && !fj->first && pg->feed.continuation) {
-        free(pg->feed.continuation); /* a page with nothing new: stop rather than loop */
-        pg->feed.continuation = NULL;
-    }
-    if (fj->first && pg->feed.n == 0)
-        snprintf(pg->status, sizeof pg->status, "No results.");
-}
-
-/* Each frame: merge a finished page and start what the current page wants. */
-static void feeds_tick(browse_state *b)
-{
-    feed_collect(b);
-    if (b->want_more)
-        feed_start(b, b->page);
-}
 
 /* During playback (player.c): keep merging pages that arrive. */
 static void play_tick(void *ud)
 {
     browse_state *b = ud;
     b->want_more = 0;
-    feeds_tick(b);
+    pages_tick(b);
 }
 
 /* ---- main ---------------------------------------------------------------------------------- */
@@ -515,25 +331,6 @@ static void quit(void)
     exit(0);
 }
 
-static int history_has_videos(void)
-{
-    int i;
-    for (i = 0; i < g_nhistory; i++)
-        if (!g_history[i].is_short)
-            return 1;
-    return 0;
-}
-
-/* After playback: the "For you" chip appears once something has been watched. */
-static void update_for_you(browse_state *b)
-{
-    if (!b->has_for_you && history_has_videos()) {
-        b->has_for_you = 1;
-        b->pages[PAGE_HOME].chip++; /* the topic chips moved one to the right */
-        b->chip_sel++;
-    }
-}
-
 static void play(browse_state *b)
 {
     play_request req;
@@ -546,7 +343,7 @@ static void play(browse_state *b)
     last = player_run(&req);
     if (req.feed == &b->pages[b->page].feed && last >= 0 && last < req.feed->n)
         browse_select(b, last);
-    update_for_you(b);
+    pages_after_play(b);
 }
 
 /* The Shorts tab: YouTube's Shorts feed, continuing from the last Short watched. */
@@ -559,7 +356,7 @@ static void play_shorts_tab(browse_state *b)
     req.tick = play_tick;
     req.tick_ud = b;
     player_run(&req);
-    update_for_you(b);
+    pages_after_play(b);
 }
 
 int main(int argc, char **argv)
@@ -597,7 +394,7 @@ int main(int argc, char **argv)
     g_logo = image_from_rgba(logo_small_rgba, logo_small_w, logo_small_h);
     g_splash = image_from_rgba(logo_splash_rgba, logo_splash_w, logo_splash_h);
     settings_load();
-    history_load();
+    pages_init(g_sd ? APP_DIR "/history.txt" : NULL);
     log_memory("startup");
 
     /* Connect while showing the splash screen. */
@@ -614,7 +411,7 @@ int main(int argc, char **argv)
     g_thumbs = thumbs_new(THUMB_URL, 160, 64, 2);
     browse_init(b, g_logo);
     b->quality = g_settings.quality;
-    b->has_for_you = history_has_videos(); /* then Home opens on "For you" (chip 0) */
+    pages_start(b);
 
     while (!g_quit) {
         int act;
@@ -624,11 +421,7 @@ int main(int argc, char **argv)
             act = keyboard_update(&kb, &in);
             if (act == ACT_KB_SEARCH) {
                 kb_open = 0;
-                snprintf(b->pages[PAGE_SEARCH].query, sizeof b->pages[PAGE_SEARCH].query, "%s", kb.text);
-                browse_reset_page(b, PAGE_SEARCH);
-                browse_set_page(b, PAGE_SEARCH);
-                b->focus = FOCUS_GRID;
-                wlog("search \"%s\"", kb.text);
+                pages_search(b, kb.text);
             } else if (act == ACT_KB_CANCEL) {
                 kb_open = 0;
             }
@@ -644,7 +437,7 @@ int main(int argc, char **argv)
                 kb_open = 1;
                 break;
             case ACT_CHIP:
-                browse_reset_page(b, b->page);
+                pages_handle(b, act);
                 break;
             case ACT_QUALITY:
                 g_settings.quality = b->quality;
@@ -662,7 +455,7 @@ int main(int argc, char **argv)
                 break;
             }
         }
-        feeds_tick(b);
+        pages_tick(b);
 
         gfx_frame_begin();
         browse_draw(b, thumb_cb, NULL);

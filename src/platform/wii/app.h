@@ -38,9 +38,8 @@ int job_collect(job *j); /* join a finished job; 1 if it was collected */
 void draw_message(const char *title, const char *detail, int busy);
 void error_screen(const char *title, const char *detail);
 
-/* ---- watch history (main.c) ---- */
-void history_add(const char *id, int is_short);
-const char *history_last_short(void); /* NULL if no Short has been watched */
+/* Watch history: see src/app/pages.h. */
+#include "../../app/pages.h"
 
 /* ---- player.c ---- */
 typedef struct {

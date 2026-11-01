@@ -10,7 +10,7 @@ ifeq ($(strip $(DEVKITPPC)),)
 $(error DEVKITPPC is not set; build inside the devkitpro/devkitppc container)
 endif
 
-APP_VERSION   ?= 0.6
+APP_VERSION   ?= 0.6.1
 FFMPEG_PREFIX ?= build/ffmpeg-wii
 CACERT        ?= deps/src/cacert.pem
 
@@ -36,7 +36,7 @@ APP_SRCS := src/core/http.c src/core/yt.c src/core/feed.c src/core/seekidx.c src
             src/core/convert.c src/core/vqueue.c src/core/log.c src/core/image.c src/core/thumbs.c \
             src/core/yuv_tev.c \
             src/ui/browse.c src/ui/keyboard.c src/ui/player_ui.c src/ui/ui_common.c src/ui/atlas_data.c third_party/cJSON/cJSON.c \
-            src/platform/wii/main.c src/platform/wii/player.c src/platform/wii/gfx.c src/platform/wii/audio.c \
+            src/app/pages.c src/platform/wii/main.c src/platform/wii/player.c src/platform/wii/gfx.c src/platform/wii/audio.c \
             src/platform/wii/net_wii.c src/platform/wii/thread_wii.c src/platform/wii/logo_data.c
 APP_OBJS := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS)) $(BUILD)/rules_builtin.o $(BUILD)/cacert.o
 

@@ -87,6 +87,23 @@ The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cl
    Only change C code if the request/response *shape* changed.
 3. Bump `rules_version`/`updated`, then test with `wiitube-cli info` and `get`.
 
+## Status (2026-11-02) — v0.6.1: search fixed, the app's browse flow tested live
+- User report on v0.6: "nothing is being searched, i can only watch shorts". Cause (also
+  behind v0.5's "chips and Shorts don't work"): main.c called
+  `yt_feed_start(&job->result, job->result.query, ...)` and yt_feed_start began with
+  `yt_feed_free(f)`, which zeroed the query it was given, so every Home topic and search
+  asked YouTube for "". The Shorts tab passed a separate buffer, so it worked. Fixed in
+  yt_feed_start (copies the query first; an empty query is now an error).
+- CI never caught it because the live tests called yt_feed_start with their own buffers.
+  Now the page loader + watch history live in portable `src/app/pages.c` (Wii main.c
+  calls `pages_tick`, `pages_handle`, `pages_search`, `pages_after_play`), and
+  `tests/app_sim.c` runs that same code with the real browse screen and keyboard, driven
+  by simulated Wii Remote input against live YouTube in `youtube-test.yml` (Home loads,
+  chip change, typing "wii sports" on the keyboard + search, Shorts shelves present,
+  stick scroll loads page 2, For you after a watch). Results: `app.txt` and `app-*.png` on
+  `ci-results`; the workflow fails if the simulation fails. Keep new browse logic in
+  src/app or src/ui so it stays covered.
+
 ## Status (2026-11-01, night) — v0.6: YouTube's own order, recommendations and Shorts feed
 - User report on v0.5: "the search categories tabs and shorts don't work"; wants search
   exactly like YouTube's default (Shorts shelves among the videos), recommendations pulled

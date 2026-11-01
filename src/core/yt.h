@@ -40,7 +40,7 @@ typedef struct {
 /* First page of a list (see the YT_FEED_* kinds). YT_FEED_ALL is YouTube's normal search:
  * videos with Shorts shelves, in YouTube's order. Clears f first.
  * Returns the number of entries added, or -1 on error. */
-int yt_feed_start(yt_feed *f, const char *query, int kind, char *err, size_t errlen);
+int yt_feed_start(yt_feed *f, const char *query, int kind, char *err, size_t errlen); /* query may be f->query */
 /* Append the next page. Returns entries added (0 when there are no more pages), -1 on error. */
 int yt_feed_more(yt_feed *f, char *err, size_t errlen);
 void yt_feed_free(yt_feed *f);
