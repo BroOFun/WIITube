@@ -32,6 +32,14 @@ sh deps/fetch.sh && make
 ```
 Sanitizer build: `make clean && make CFLAGS="-O1 -g -fsanitize=address,undefined" LIBS="-lz -fsanitize=address,undefined"`.
 
+## Live test on GitHub Actions
+`.github/workflows/youtube-test.yml` runs `tests/youtube_smoke.sh` (search, info, 240p get,
+ffprobe check) on pushes touching code, daily at 09:17 UTC, and on demand. It force-pushes
+`results.txt` to the **`ci-results`** branch, so a session that can't use the Actions API can
+read results with `git fetch origin ci-results && git show origin/ci-results:results.txt`.
+The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cloud IPs, so
+"Sign in to confirm you're not a bot" there doesn't necessarily mean home connections fail.
+
 ## How YouTube access works (as of yt-dlp 2026.10.26)
 - Search uses the `web` client (no tokens needed).
 - Player: `visionos` client (`VISIONOS` 1.02, client id 101) needs **no JavaScript and no
