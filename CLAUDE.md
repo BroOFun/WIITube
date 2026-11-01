@@ -81,6 +81,16 @@ The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cl
    Only change C code if the request/response *shape* changed.
 3. Bump `rules_version`/`updated`, then test with `wiitube-cli info` and `get`.
 
+## Status (2026-11-01, later)
+- **Wii app v0.1 builds** in CI (commit 15b8c3f): boot.dol 4.4 MB, zip on `ci-build`.
+  Not yet run on hardware or in Dolphin. FFmpeg 7.1.2 for the Wii builds with
+  `--disable-pthreads`; FFmpeg warns its libraries must then not be used from several
+  threads. We keep that safe: both decoders are opened (and closed) on the main thread while
+  the vqueue worker is not running, each thread only touches its own context, and av_log
+  goes through the mutex-protected wlog. Keep it that way when changing playback code.
+- Next: user's first hardware test (ask for `sd:/apps/wiitube/wiitube.log`), then likely
+  fixes; Dolphin-in-CI smoke test; thumbnails; seeking; nicer GX menu UI.
+
 ## Status (2026-11-01)
 - Done: HTTPS stack verified (TLS + certificate checks, gzip, chunked, 5 MB download
   byte-exact, ASan/UBSan clean).
