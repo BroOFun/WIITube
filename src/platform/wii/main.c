@@ -349,12 +349,12 @@ typedef struct {
     int ok;
 } open_job;
 
-/* Rough memory needed to play at this size: download buffers, 3 planar frame textures,
- * up to 16 decoder frames (H.264 reference frames + output), and some slack. */
+/* Rough memory needed to play at this size: download buffers, the decode-ahead frame
+ * textures, up to 16 decoder frames (H.264 reference frames + output), and some slack. */
 static unsigned needed_kb(int w, int h)
 {
     unsigned frame = (unsigned)w * h * 3 / 2;
-    return (VIDEO_BUFFER + AUDIO_BUFFER) / 1024 + 3u * frame / 1024 + 16u * frame / 1024 + 4096;
+    return (VIDEO_BUFFER + AUDIO_BUFFER) / 1024 + VQ_SLOTS * frame / 1024 + 16u * frame / 1024 + 4096;
 }
 
 static void *open_main(void *arg)

@@ -11,6 +11,10 @@
 
 typedef struct vqueue vqueue;
 
+/* Decoded frames kept: one on screen plus up to VQ_SLOTS-1 decoded ahead, which absorbs the
+ * extra time slow frames (keyframes) take to decode. */
+#define VQ_SLOTS 6
+
 typedef double (*vq_clock_fn)(void *ud);           /* current playback time (s); < 0 = not started */
 typedef void (*vq_flush_fn)(void *tex, size_t len); /* make CPU-written texture visible to the GPU */
 

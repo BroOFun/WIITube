@@ -277,7 +277,7 @@ static void test_vqueue(const char *path, const unsigned char *ref_rgb)
             changes++;
         }
         polls++;
-        if (vq_ready(q) == 3 || polls % 50 == 0)
+        if (vq_ready(q) == VQ_SLOTS - 1 || polls % 50 == 0)
             fake_set(&clk, fake_now(&clk) + 0.02); /* 50 Hz display */
         if (!jumped && fake_now(&clk) > 1.0) {
             fake_set(&clk, fake_now(&clk) + 1.0);

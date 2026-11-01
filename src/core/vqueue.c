@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NSLOTS 3
+#define NSLOTS VQ_SLOTS
 #define LATE_DROP 0.25  /* seconds behind the clock: don't bother converting */
 #define LATE_SKIP1 0.10 /* start skipping deblocking */
 #define LATE_SKIP2 0.40 /* also skip non-reference frames */
