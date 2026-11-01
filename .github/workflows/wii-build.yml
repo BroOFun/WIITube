@@ -1,6 +1,6 @@
 # Builds the Wii app (boot.dol) in devkitPro's official container.
-# Results go to the ci-build branch: status.txt, build logs, and WIITube-wii.zip
-# (download: https://github.com/BroOFun/wiitube/raw/ci-build/WIITube-wii.zip).
+# Results go to the ci-build branch: status.txt, build logs, and WiiTube.zip
+# (download: https://github.com/BroOFun/wiitube/raw/ci-build/WiiTube.zip).
 name: Wii build
 
 on:
@@ -52,7 +52,7 @@ jobs:
           set -o pipefail
           sh deps/build_ffmpeg_wii.sh build/ffmpeg-wii 2>&1 | tee ffmpeg.log
 
-      - name: Build WIITube
+      - name: Build WiiTube
         id: app
         if: steps.ffmpeg.outcome == 'success'
         continue-on-error: true
@@ -75,8 +75,8 @@ jobs:
           [ -f ffmpeg.log ] && tail -c 200000 ffmpeg.log > /tmp/out/ffmpeg.log
           [ -f build.log ] && tail -c 300000 build.log > /tmp/out/build.log
           grep -E "error|warning" build.log 2>/dev/null | head -300 > /tmp/out/diagnostics.txt || true
-          if [ -f build/wii/WIITube-wii.zip ]; then
-            cp build/wii/WIITube-wii.zip /tmp/out/
+          if [ -f build/wii/WiiTube.zip ]; then
+            cp build/wii/WiiTube.zip /tmp/out/
             ls -l build/wii/boot.dol >> /tmp/out/status.txt
           fi
           cat /tmp/out/status.txt
@@ -92,8 +92,8 @@ jobs:
         if: steps.app.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: WIITube-wii
-          path: build/wii/WIITube-wii.zip
+          name: WiiTube
+          path: build/wii/WiiTube.zip
 
       - name: Fail if the build failed
         if: steps.ffmpeg.outcome != 'success' || steps.app.outcome != 'success'

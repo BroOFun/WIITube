@@ -111,6 +111,46 @@ void gfx_init(void)
 }
 
 int gfx_widescreen(void) { return widescreen; }
+int gfx_screen_width(void) { return rmode->fbWidth; }
+int gfx_console_x(void) { return CON_MARGIN_X; }
+int gfx_console_y(void) { return CON_MARGIN_Y; }
+
+/* The framebuffer stores pixel pairs as Y0 Cb Y1 Cr (one u32 per two pixels). */
+int gfx_console_image(const unsigned char *rgba, int w, int h, int x, int y)
+{
+    u32 *fb = (u32 *)con_xfb;
+    const int stride = rmode->fbWidth / 2;
+    const int dw = widescreen ? w * 3 / 4 : w;
+    int dx, dy;
+
+    x &= ~1;
+    for (dy = 0; dy < h; dy++) {
+        const int py = y + dy;
+        if (py < 0 || py >= rmode->xfbHeight)
+            continue;
+        for (dx = 0; dx + 1 < dw; dx += 2) {
+            const int px = x + dx;
+            int sx0 = dx * w / dw, sx1 = (dx + 1) * w / dw;
+            const unsigned char *p0, *p1;
+            int r0, g0, b0, r1, g1, b1, r, g, b, y0, y1, cb, cr;
+            if (px < 0 || px + 1 >= rmode->fbWidth)
+                continue;
+            if (sx1 >= w)
+                sx1 = w - 1;
+            p0 = rgba + (dy * w + sx0) * 4;
+            p1 = rgba + (dy * w + sx1) * 4;
+            r0 = p0[0] * p0[3] / 255; g0 = p0[1] * p0[3] / 255; b0 = p0[2] * p0[3] / 255;
+            r1 = p1[0] * p1[3] / 255; g1 = p1[1] * p1[3] / 255; b1 = p1[2] * p1[3] / 255;
+            r = (r0 + r1) / 2; g = (g0 + g1) / 2; b = (b0 + b1) / 2;
+            y0 = ((66 * r0 + 129 * g0 + 25 * b0 + 128) >> 8) + 16;
+            y1 = ((66 * r1 + 129 * g1 + 25 * b1 + 128) >> 8) + 16;
+            cb = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+            cr = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+            fb[py * stride + px / 2] = ((u32)y0 << 24) | ((u32)cb << 16) | ((u32)y1 << 8) | (u32)cr;
+        }
+    }
+    return dw;
+}
 int gfx_console_cols(void) { return con_cols; }
 int gfx_console_rows(void) { return con_rows; }
 

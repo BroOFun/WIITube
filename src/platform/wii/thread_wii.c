@@ -67,35 +67,43 @@ uint64_t wt_time_us(void) { return ticks_to_microsecs(gettime()); }
 mbedtls_ms_time_t mbedtls_ms_time(void) { return (mbedtls_ms_time_t)ticks_to_millisecs(gettime()); }
 void wt_sleep_ms(int ms) { usleep((useconds_t)ms * 1000u); }
 
-/* ---- mbedTLS mutexes ---- */
+/* ---- mbedTLS mutexes ----
+ * libogc has a fixed pool of 64 mutexes for the whole program, and mbedTLS creates one per
+ * RSA key, so loading the ~145 built-in CA certificates used them all up (later mutex
+ * creation failed, which surfaced as "Out of memory" when starting a video). All mbedTLS
+ * "mutexes" therefore share one recursive LWP mutex. mbedTLS only holds them for short,
+ * non-blocking sections, and with a single lock there is no lock-order deadlock. */
+
+static mutex_t g_tls_lock;
+static int g_tls_lock_ok;
 
 static void mt_init(mbedtls_threading_mutex_t *m)
 {
-    m->valid = LWP_MutexInit(&m->handle, false) == 0;
+    m->handle = 0;
+    m->valid = 1;
 }
 
 static void mt_free(mbedtls_threading_mutex_t *m)
 {
-    if (m->valid)
-        LWP_MutexDestroy(m->handle);
     m->valid = 0;
 }
 
 static int mt_lock(mbedtls_threading_mutex_t *m)
 {
-    if (!m->valid || LWP_MutexLock(m->handle) != 0)
+    if (!m->valid || !g_tls_lock_ok || LWP_MutexLock(g_tls_lock) != 0)
         return MBEDTLS_ERR_THREADING_MUTEX_ERROR;
     return 0;
 }
 
 static int mt_unlock(mbedtls_threading_mutex_t *m)
 {
-    if (!m->valid || LWP_MutexUnlock(m->handle) != 0)
+    if (!m->valid || !g_tls_lock_ok || LWP_MutexUnlock(g_tls_lock) != 0)
         return MBEDTLS_ERR_THREADING_MUTEX_ERROR;
     return 0;
 }
 
 void wii_mbedtls_threading_init(void)
 {
+    g_tls_lock_ok = LWP_MutexInit(&g_tls_lock, true) == 0;
     mbedtls_threading_set_alt(mt_init, mt_free, mt_lock, mt_unlock);
 }

@@ -1,4 +1,5 @@
 #include "ring.h"
+#include "log.h"
 #include "thread.h"
 
 #include <stdlib.h>
@@ -21,6 +22,8 @@ ring *ring_new(size_t capacity)
     r->mu = wt_mutex_new();
     r->cv = wt_cond_new();
     if (!r->buf || !r->mu || !r->cv) {
+        wlog("ring: setup failed (%u-byte buffer %s, mutex %s, cond %s)", (unsigned)capacity,
+             r->buf ? "ok" : "FAILED", r->mu ? "ok" : "FAILED", r->cv ? "ok" : "FAILED");
         ring_free(r);
         return NULL;
     }

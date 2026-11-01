@@ -1,4 +1,6 @@
-# WIITube: project notes for Claude sessions
+# WiiTube: project notes for Claude sessions
+
+The app is called **WiiTube** (capital W, lowercase ii); the GitHub repo is BroOFun/wiitube.
 
 Goal: a **standalone** YouTube client for the Wii (runs on the owner's Wii U vWii with the
 Homebrew Channel). No proxy server: the Wii itself talks to YouTube over HTTPS and plays
@@ -46,9 +48,9 @@ Player pipeline test (needs `libavformat-dev libavcodec-dev libavutil-dev` + ffm
 Only in CI: `.github/workflows/wii-build.yml` runs in the `devkitpro/devkitppc` container,
 builds FFmpeg (`deps/build_ffmpeg_wii.sh`, cached) and `make -f Makefile.wii`, then
 force-pushes `status.txt`, `build.log`, `ffmpeg.log`, `diagnostics.txt` and
-`WIITube-wii.zip` to the **`ci-build`** branch
+`WiiTube.zip` to the **`ci-build`** branch
 (`git fetch origin ci-build && git show FETCH_HEAD:status.txt`). Users download
-`https://github.com/BroOFun/wiitube/raw/ci-build/WIITube-wii.zip`.
+`https://github.com/BroOFun/wiitube/raw/ci-build/WiiTube.zip`.
 Running downloaded toolchains in the dev container is blocked by the session's safety
 policy, so syntax-check Wii code locally against cloned libogc headers instead:
 `gcc -fsyntax-only -std=gnu99 -DGEKKO -DHW_RVL -DWIITUBE_PLATFORM_WII ... -I<libogc>/gc`.
@@ -80,6 +82,15 @@ The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cl
 2. Update versions, user agents, or the `player_clients` order in `rules/youtube.json` first.
    Only change C code if the request/response *shape* changed.
 3. Bump `rules_version`/`updated`, then test with `wiitube-cli info` and `get`.
+
+## Status (2026-11-01, evening)
+- First hardware test (Wii U vWii, v0.1): network, TLS and **search work**; starting a video
+  failed with "Out of memory". Cause: libogc (tuxedo) has a fixed pool of 64 LWP mutexes and
+  mbedTLS THREADING_C makes one per RSA key, so parsing the ~145 CA certificates used them
+  all; later wt_mutex_new() failed. Fix in v0.2: all mbedTLS mutexes share one recursive
+  LWP mutex (thread_wii.c). Also LWP conds are a 64-slot pool. Watch for other pool limits.
+- v0.2 adds the WiiTube logo (header + splash drawn into the console XFB by
+  gfx_console_image, HBC icon.png), memory logging (log_memory) and clearer errors.
 
 ## Status (2026-11-01, later)
 - **Wii app v0.1 builds** in CI (commit 15b8c3f): boot.dol 4.4 MB, zip on `ci-build`.

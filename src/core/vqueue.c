@@ -141,6 +141,8 @@ vqueue *vq_start(media *m, vq_clock_fn clock, void *clock_ud, vq_flush_fn flush,
         q->slots[i].tex = (uint16_t *)(((uintptr_t)q->slots[i].raw + 31) & ~(uintptr_t)31);
     }
     if (i < NSLOTS || !q->mu || !q->cv) {
+        wlog("video: setup failed (%d/%d textures of %u bytes, mutex %s, cond %s)", i, NSLOTS,
+             (unsigned)q->tex_bytes, q->mu ? "ok" : "FAILED", q->cv ? "ok" : "FAILED");
         q->thread = NULL;
         vq_stop(q);
         return NULL;
@@ -148,6 +150,7 @@ vqueue *vq_start(media *m, vq_clock_fn clock, void *clock_ud, vq_flush_fn flush,
     set_skip(q, base_skip);
     q->thread = wt_thread_start(worker, q, 256 * 1024, 0);
     if (!q->thread) {
+        wlog("video: could not start decoder thread");
         vq_stop(q);
         return NULL;
     }

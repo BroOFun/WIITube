@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <app version="1">
-  <name>WIITube</name>
+  <name>WiiTube</name>
   <coder>BroOFun</coder>
   <version>@VERSION@</version>
   <release_date>@DATE@</release_date>

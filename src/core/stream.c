@@ -1,4 +1,5 @@
 #include "stream.h"
+#include "log.h"
 #include "thread.h"
 
 #include <stdio.h>
@@ -73,6 +74,8 @@ yt_stream *yt_stream_start(const yt_video *v, const yt_format *f, size_t buffer_
     s->r = ring_new(buffer_size);
     s->mu = wt_mutex_new();
     if (!s->url || !s->r || !s->mu) {
+        wlog("stream: setup failed (url %s, %u-byte buffer %s, mutex %s)", s->url ? "ok" : "FAILED",
+             (unsigned)buffer_size, s->r ? "ok" : "FAILED", s->mu ? "ok" : "FAILED");
         free(s->url);
         ring_free(s->r);
         wt_mutex_free(s->mu);
@@ -83,6 +86,7 @@ yt_stream *yt_stream_start(const yt_video *v, const yt_format *f, size_t buffer_
     /* TLS handshakes need a fair amount of stack. */
     s->thread = wt_thread_start(stream_main, s, 128 * 1024, 1);
     if (!s->thread) {
+        wlog("stream: could not start download thread");
         s->refs = 1;
         release(s);
         return NULL;
