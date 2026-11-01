@@ -83,6 +83,24 @@ The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cl
    Only change C code if the request/response *shape* changed.
 3. Bump `rules_version`/`updated`, then test with `wiitube-cli info` and `get`.
 
+## Status (2026-11-02) — v0.4: smooth 480p
+- User report on v0.3: everything works; 480p stutters (low fps) although downloading keeps up.
+- Cause: the CPU converted every frame YUV -> tiled RGB565 (~34x more work than needed; at
+  480p roughly a whole frame period on Broadway), stealing time from H.264 decoding.
+- Fix: the GPU converts. `vqueue` now only tiles the Y/U/V planes into I8 textures
+  (`conv_plane_to_i8`, ~memcpy cost) and `dr_video` (gfx.c) draws them with a 6-stage TEV
+  combiner defined in `src/core/yuv_tev.[ch]`. `yuv_tev_pixel()` is a bit-exact model of
+  those stages (Dolphin's TEV integer maths) used by `make test-yuv`, `test-media` and the
+  preview renderer, so the constants are tested without hardware (mean error ~0.5/255).
+  Stage layout: P=C0+ky*Y; +k1*V (R); -k2*V (G); +1.0*U via vertex colour (0,0,255) (B);
+  +k3*U (B); 2*(P-k5*U) clamp (G). K0 alpha = ky (KCSEL_K0_A), TEVREG0 = signed constants.
+- FFmpeg: default -O3 (no -O2 override), `--disable-safe-bitstream-reader`,
+  `--enable-hardcoded-tables`; video decoder uses `AV_CODEC_FLAG2_FAST`.
+- 480p is the default (`DEFAULT_QUALITY`); settings.txt now has `version=2` and older files
+  are ignored so existing installs switch to 480p.
+- Per-video log line now includes average decode and prepare (tiling) ms per frame — ask
+  the user for it if 480p still stutters; adaptive skipping (vqueue LATE_SKIP*) remains.
+
 ## Status (2026-11-01, night) — v0.3
 - v0.2 on hardware: video playback works (user confirmed). v0.3 = YouTube-style UI:
   - `src/ui/` (portable): `draw.h` API (fill, gradient, atlas region, image, clip) on a

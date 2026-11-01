@@ -84,6 +84,50 @@ static void fill_results(browse_state *b)
     b->nresults = NSAMPLE;
 }
 
+/* Turn an RGB image into a planar BT.709 YUV frame (what the decoder produces), so the
+ * player screen exercises the same GPU colour path as real video. */
+static yuv_frame *to_yuv(const wt_image *img)
+{
+    static yuv_frame f;
+    uint8_t *y, *u, *v, *ty, *tu, *tv;
+    int x, yy;
+    f.w = img->w;
+    f.h = img->h;
+    f.yw = conv_i8_w(f.w);
+    f.yh = conv_i8_h(f.h);
+    f.cw = (f.w + 1) / 2;
+    f.ch = (f.h + 1) / 2;
+    f.cwt = conv_i8_w(f.cw);
+    f.cht = conv_i8_h(f.ch);
+    f.bt709 = 1;
+    y = malloc((size_t)f.w * f.h);
+    u = malloc((size_t)f.cw * f.ch);
+    v = malloc((size_t)f.cw * f.ch);
+    for (yy = 0; yy < f.h; yy++)
+        for (x = 0; x < f.w; x++) {
+            uint8_t p[3];
+            image_pixel(img, x, yy, p);
+            y[yy * f.w + x] = (uint8_t)(16 + (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) * 219 / 255 + 0.5);
+            if (!(x & 1) && !(yy & 1)) {
+                u[(yy / 2) * f.cw + x / 2] = (uint8_t)(128 + (-0.1146 * p[0] - 0.3854 * p[1] + 0.5 * p[2]) * 224 / 255 + 0.5);
+                v[(yy / 2) * f.cw + x / 2] = (uint8_t)(128 + (0.5 * p[0] - 0.4542 * p[1] - 0.0458 * p[2]) * 224 / 255 + 0.5);
+            }
+        }
+    ty = malloc((size_t)f.yw * f.yh);
+    tu = malloc((size_t)f.cwt * f.cht);
+    tv = malloc((size_t)f.cwt * f.cht);
+    conv_plane_to_i8(y, f.w, f.w, f.h, ty);
+    conv_plane_to_i8(u, f.cw, f.cw, f.ch, tu);
+    conv_plane_to_i8(v, f.cw, f.cw, f.ch, tv);
+    free(y);
+    free(u);
+    free(v);
+    f.y = ty;
+    f.u = tu;
+    f.v = tv;
+    return &f;
+}
+
 int main(int argc, char **argv)
 {
     static browse_state b;
@@ -91,6 +135,7 @@ int main(int argc, char **argv)
     player_view p;
     ui_input in;
     wt_image *logo, *splash, *frame;
+    const yuv_frame *yuv;
     const char *out = argc > 2 ? argv[2] : ".";
     char path[512];
     int widths[2] = { 640, 854 }, wi, i;
@@ -101,6 +146,7 @@ int main(int argc, char **argv)
     }
     snprintf(path, sizeof path, "%s/t0.jpg", argc > 1 ? argv[1] : ".");
     frame = load_jpeg(path, 0); /* stands in for a 320x180 video frame */
+    yuv = to_yuv(frame);
     logo = image_from_rgba(logo_small_rgba, logo_small_w, logo_small_h);
     splash = image_from_rgba(logo_splash_rgba, logo_splash_w, logo_splash_h);
 
@@ -164,7 +210,7 @@ int main(int argc, char **argv)
             soft_begin(W);
             dr_fill(0, 0, W, UI_H, 0x000000ff);
             ui_fit(frame->w, frame->h, &x, &y, &dw, &dh);
-            dr_image(frame, x, y, dw, dh, 255);
+            dr_video(yuv, x, y, dw, dh);
             p.paused = i;
             player_draw_overlay(&p);
             save(out, i ? "player-paused" : "player", W);

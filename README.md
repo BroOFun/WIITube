@@ -5,7 +5,7 @@
 A standalone YouTube client for the Nintendo Wii (and Wii U vWii) Homebrew Channel. Work in progress.
 
 The Wii talks to YouTube directly with no proxy server, and plays low-resolution H.264
-video (144p–360p), which the Wii's CPU can decode.
+video (up to 480p): the CPU decodes, the GPU converts colours and scales.
 
 ## Installing on the Wii / Wii U (vWii)
 1. Download [WiiTube.zip](https://github.com/BroOFun/wiitube/raw/ci-build/WiiTube.zip)
@@ -15,7 +15,8 @@ video (144p–360p), which the Wii's CPU can decode.
    the Homebrew Channel.
 
 Controls: point with the Wii Remote (or use the D-Pad), A selects, B goes back, + opens
-search, 1 changes quality (144p/240p/360p/480p, remembered on the SD card), HOME exits.
+search, 1 changes quality (480p by default; 144p/240p/360p/480p, remembered on the SD card),
+HOME exits.
 While a video plays: A pauses, +/- change the volume, B returns to the videos.
 
 If something goes wrong, the app writes `sd:/apps/wiitube/wiitube.log`; please include it
@@ -24,8 +25,9 @@ when reporting the problem.
 ## Status
 - Desktop prototype (`wiitube-cli`): HTTPS client, YouTube search, stream lookup and
   download, tested daily against the live site on GitHub Actions.
-- Wii app (v0.3): YouTube-style interface (thumbnail grid, topic chips, search keyboard,
-  player controls). v0.2 played videos on a Wii U (vWii); v0.3 is not yet tested on hardware.
+- Wii app (v0.4): YouTube-style interface (thumbnail grid, topic chips, search keyboard,
+  player controls) tested on a Wii U (vWii). v0.4 moves the video colour conversion to the
+  Wii's GPU so 480p plays smoothly; 480p is the default.
 
 ## Building the desktop prototype (Linux / WSL / macOS)
 Needs a C compiler, `make`, `curl`, and zlib headers (`zlib1g-dev` on Debian/Ubuntu).

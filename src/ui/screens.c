@@ -100,7 +100,7 @@ void browse_init(browse_state *b, const wt_image *logo)
 {
     memset(b, 0, sizeof *b);
     b->logo = logo;
-    b->quality = 240;
+    b->quality = 480;
     b->focus = FOCUS_GRID;
 }
 

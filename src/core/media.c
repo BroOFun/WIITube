@@ -115,6 +115,8 @@ media *media_open(ring *r, int kind, char *err, size_t errlen)
         goto fail;
     }
     m->dec->thread_count = 1;
+    if (kind == MEDIA_VIDEO)
+        m->dec->flags2 |= AV_CODEC_FLAG2_FAST; /* allow FFmpeg's speed shortcuts (not bit-exact) */
     m->dec->pkt_timebase = m->st->time_base;
     rc = avcodec_open2(m->dec, codec, NULL);
     if (rc < 0) {

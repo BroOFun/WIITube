@@ -14,6 +14,7 @@
 #include "../src/core/ring.h"
 #include "../src/core/thread.h"
 #include "../src/core/vqueue.h"
+#include "../src/core/yuv_tev.h"
 
 static int failures;
 #define CHECK(cond, ...)                                    \
@@ -224,7 +225,7 @@ static void fake_set(fake_clock *c, double t)
 
 /* Decode worker: frames come out in order at the right time; a clock jump makes it drop
  * frames and raise the skip level instead of falling further behind. */
-static void test_vqueue(const char *path)
+static void test_vqueue(const char *path, const unsigned char *ref_rgb)
 {
     feeder fd = { path, ring_new(64 * 1024), 0 };
     wt_thread *t = wt_thread_start(feed_main, &fd, 0, 1);
@@ -233,7 +234,8 @@ static void test_vqueue(const char *path)
     fake_clock clk = { wt_mutex_new(), -1 };
     vqueue *q;
     vq_stats st;
-    const uint16_t *tex, *last_tex = NULL;
+    const yuv_frame *fr, *last = NULL;
+    int checked_colour = 0;
     int polls = 0, changes = 0, jumped = 0;
 
     CHECK(m != NULL, "media_open for vqueue: %s", err);
@@ -241,15 +243,37 @@ static void test_vqueue(const char *path)
         return;
     q = vq_start(m, fake_now, &clk, NULL, 0);
     CHECK(q != NULL, "vq_start failed");
-    CHECK(vq_tex_width(q) == 428 && vq_tex_height(q) == 240, "texture size %dx%d", vq_tex_width(q),
-          vq_tex_height(q));
+    CHECK(vq_frame_width(q) == 426 && vq_frame_height(q) == 240, "frame size %dx%d", vq_frame_width(q),
+          vq_frame_height(q));
     while (vq_ready(q) == 0 && !vq_finished(q))
         wt_sleep_ms(1);
     fake_set(&clk, 0);
     while (!vq_finished(q) && polls < 100000) {
-        if (vq_poll(q, fake_now(&clk), &tex)) {
-            CHECK(tex != last_tex, "same texture returned twice in a row");
-            last_tex = tex;
+        if (vq_poll(q, fake_now(&clk), &fr)) {
+            CHECK(fr != last, "same frame returned twice in a row");
+            CHECK(fr->yw == 432 && fr->yh == 240 && fr->cw == 213 && fr->ch == 120 && fr->cwt == 216 && fr->cht == 120,
+                  "plane sizes %dx%d / %dx%d in %dx%d", fr->yw, fr->yh, fr->cw, fr->ch, fr->cwt, fr->cht);
+            if (!checked_colour && ref_rgb) {
+                /* First frame through the GPU path (tiled planes + TEV model) vs FFmpeg's RGB. */
+                yuv_tev_consts k;
+                double sum = 0;
+                int x, y, c;
+                yuv_tev_constants(fr->bt709, &k);
+                for (y = 0; y < fr->h; y++)
+                    for (x = 0; x < fr->w; x++) {
+                        uint8_t rgb[3];
+                        yuv_tev_pixel(&k, conv_i8_texel(fr->y, fr->yw, x, y),
+                                      conv_i8_texel(fr->u, fr->cwt, x / 2, y / 2),
+                                      conv_i8_texel(fr->v, fr->cwt, x / 2, y / 2), rgb);
+                        for (c = 0; c < 3; c++)
+                            sum += fabs((double)rgb[c] - ref_rgb[(y * fr->w + x) * 3 + c]);
+                    }
+                sum /= (double)fr->w * fr->h * 3;
+                printf("first frame via GPU path: mean abs error vs ffmpeg RGB = %.2f\n", sum);
+                CHECK(sum < 3.0, "GPU-path colour error too high (%.2f)", sum);
+                checked_colour = 1;
+            }
+            last = fr;
             changes++;
         }
         polls++;
@@ -287,7 +311,12 @@ int main(int argc, char **argv)
     test_video(argv[1], argv[3]);
     test_audio(argv[2]);
     test_abort(argv[1]);
-    test_vqueue(argv[1]);
+    {
+        size_t ref_len = 0;
+        unsigned char *ref = read_file(argv[3], &ref_len);
+        test_vqueue(argv[1], ref && ref_len == 426 * 240 * 3 ? ref : NULL);
+        free(ref);
+    }
     printf(failures ? "%d FAILURE(S)\n" : "all media tests passed\n", failures);
     return failures != 0;
 }

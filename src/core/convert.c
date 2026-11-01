@@ -1,5 +1,7 @@
 #include "convert.h"
 
+#include <string.h>
+
 /* Limited-range YUV -> RGB in 8.8 fixed point:
  *   R = 1.164 (Y-16) + cr_r (V-128)
  *   G = 1.164 (Y-16) - cb_g (U-128) - cr_g (V-128)
@@ -57,4 +59,33 @@ void conv_tiled_pixel(const uint16_t *tex, int tex_w, int x, int y, uint8_t rgb[
     rgb[0] = (uint8_t)(((p >> 11) & 31) * 255 / 31);
     rgb[1] = (uint8_t)(((p >> 5) & 63) * 255 / 63);
     rgb[2] = (uint8_t)((p & 31) * 255 / 31);
+}
+
+void conv_plane_to_i8(const uint8_t *src, int stride, int w, int h, uint8_t *dst)
+{
+    const int tw = conv_i8_w(w), th = conv_i8_h(h);
+    const int full = w >> 3; /* tiles that lie completely inside the picture */
+    int ty, tx, r;
+
+    for (ty = 0; ty < th; ty += 4) {
+        const uint8_t *row[4];
+        for (r = 0; r < 4; r++)
+            row[r] = src + (size_t)(ty + r < h ? ty + r : h - 1) * stride;
+        /* Whole tiles: four 8-byte copies each (aligned, so the compiler uses word moves). */
+        for (tx = 0; tx < full; tx++) {
+            const int x = tx << 3;
+            memcpy(dst, row[0] + x, 8);
+            memcpy(dst + 8, row[1] + x, 8);
+            memcpy(dst + 16, row[2] + x, 8);
+            memcpy(dst + 24, row[3] + x, 8);
+            dst += 32;
+        }
+        /* Last, partial tile: repeat the edge pixel. */
+        for (tx = full << 3; tx < tw; tx += 8)
+            for (r = 0; r < 4; r++) {
+                int i;
+                for (i = 0; i < 8; i++)
+                    *dst++ = row[r][tx + i < w ? tx + i : w - 1];
+            }
+    }
 }

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../core/yuv_tev.h"
 #include "../../ui/atlas.h"
 #include "../../ui/draw.h"
 
@@ -159,6 +160,49 @@ void dr_image(const wt_image *img, float x, float y, float w, float h, uint8_t a
             for (k = 0; k < 4; k++)
                 out[k] = (p00[k] * (1 - fu) + p10[k] * fu) * (1 - fv) + (p01[k] * (1 - fu) + p11[k] * fu) * fv;
             blend(px, py, out[0], out[1], out[2], out[3] / 255.0f * alpha / 255.0f);
+        }
+    }
+}
+
+/* Bilinear sample of an I8-tiled plane at texel coordinate (u, v), like the GPU's filter. */
+static int plane_sample(const uint8_t *tex, int tw, int w, int h, float u, float v)
+{
+    int iu, iv, iu1, iv1;
+    float fu, fv, s;
+    u -= 0.5f;
+    v -= 0.5f;
+    if (u < 0) u = 0;
+    if (v < 0) v = 0;
+    iu = (int)u;
+    iv = (int)v;
+    fu = u - iu;
+    fv = v - iv;
+    if (iu > w - 1) { iu = w - 1; fu = 0; }
+    if (iv > h - 1) { iv = h - 1; fv = 0; }
+    iu1 = iu + 1 < w ? iu + 1 : w - 1;
+    iv1 = iv + 1 < h ? iv + 1 : h - 1;
+    s = (conv_i8_texel(tex, tw, iu, iv) * (1 - fu) + conv_i8_texel(tex, tw, iu1, iv) * fu) * (1 - fv) +
+        (conv_i8_texel(tex, tw, iu, iv1) * (1 - fu) + conv_i8_texel(tex, tw, iu1, iv1) * fu) * fv;
+    return (int)(s + 0.5f);
+}
+
+void dr_video(const yuv_frame *f, float x, float y, float w, float h)
+{
+    yuv_tev_consts k;
+    int x0, y0, x1, y1, px, py;
+    if (!f || w <= 0 || h <= 0 || !span(x, y, w, h, &x0, &y0, &x1, &y1))
+        return;
+    yuv_tev_constants(f->bt709, &k);
+    for (py = y0; py < y1; py++) {
+        float fy = (py + 0.5f - y) / h;
+        for (px = x0; px < x1; px++) {
+            float fx = (px + 0.5f - x) / w;
+            uint8_t rgb[3];
+            int Y = plane_sample(f->y, f->yw, f->w, f->h, fx * f->w, fy * f->h);
+            int U = plane_sample(f->u, f->cwt, f->cw, f->ch, fx * f->cw, fy * f->ch);
+            int V = plane_sample(f->v, f->cwt, f->cw, f->ch, fx * f->cw, fy * f->ch);
+            yuv_tev_pixel(&k, Y, U, V, rgb);
+            blend(px, py, rgb[0], rgb[1], rgb[2], 1.0f);
         }
     }
 }

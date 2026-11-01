@@ -3,6 +3,7 @@
 #include <malloc.h>
 #include <string.h>
 
+#include "../../core/yuv_tev.h"
 #include "../../ui/atlas.h"
 #include "../../ui/draw.h"
 #include "gfx.h"
@@ -210,6 +211,106 @@ void dr_image(const wt_image *img, float x, float y, float w, float h, uint8_t a
         cur_tex = img->tex;
     }
     quad(x, y, w, h, 0, 0, (float)img->w / img->tw, (float)img->h / img->th, c, c);
+}
+
+/* One stage of the YUV->RGB combiner: P = d op (konst-or-ras * texture), see yuv_tev.h. */
+static void yuv_stage(u8 stage, u8 coord, u8 map, u8 ksel, u8 cin, u8 din, u8 op, u8 scale, u8 clamp)
+{
+    GX_SetTevOrder(stage, coord, map, GX_COLOR0A0);
+    GX_SetTevKColorSel(stage, ksel);
+    GX_SetTevColorIn(stage, GX_CC_ZERO, GX_CC_TEXC, cin, din);
+    GX_SetTevColorOp(stage, op, GX_TB_ZERO, scale, clamp, GX_TEVPREV);
+    GX_SetTevAlphaIn(stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA);
+    GX_SetTevAlphaOp(stage, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+}
+
+void dr_video(const yuv_frame *f, float x, float y, float w, float h)
+{
+    static GXTexObj ty, tu, tv;
+    static yuv_tev_consts consts[2];
+    static int have_consts;
+    const yuv_tev_consts *k;
+    GXColorS10 c0;
+    GXColor kc;
+    float ys, yt, cs, ct;
+    const u32 col = 0x0000ffffu; /* the vertex colour supplies stage 3's (0, 0, 1) */
+
+    if (!f || w <= 0 || h <= 0)
+        return;
+    if (!have_consts) {
+        yuv_tev_constants(0, &consts[0]);
+        yuv_tev_constants(1, &consts[1]);
+        have_consts = 1;
+    }
+    k = &consts[f->bt709 ? 1 : 0];
+    ys = (float)f->w / f->yw;
+    yt = (float)f->h / f->yh;
+    cs = (float)f->cw / f->cwt;
+    ct = (float)f->ch / f->cht;
+
+    GX_InitTexObj(&ty, (void *)f->y, (u16)f->yw, (u16)f->yh, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GX_InitTexObj(&tu, (void *)f->u, (u16)f->cwt, (u16)f->cht, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GX_InitTexObj(&tv, (void *)f->v, (u16)f->cwt, (u16)f->cht, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GX_InitTexObjFilterMode(&ty, GX_LINEAR, GX_LINEAR);
+    GX_InitTexObjFilterMode(&tu, GX_LINEAR, GX_LINEAR);
+    GX_InitTexObjFilterMode(&tv, GX_LINEAR, GX_LINEAR);
+    GX_LoadTexObj(&ty, GX_TEXMAP0);
+    GX_LoadTexObj(&tu, GX_TEXMAP1);
+    GX_LoadTexObj(&tv, GX_TEXMAP2);
+
+    c0.r = k->c0[0];
+    c0.g = k->c0[1];
+    c0.b = k->c0[2];
+    c0.a = 0;
+    GX_SetTevColorS10(GX_TEVREG0, c0);
+    kc.r = k->k5[0]; kc.g = k->k5[1]; kc.b = k->k5[2]; kc.a = k->ky; /* K0: rgb for stage 5, alpha = Y */
+    GX_SetTevKColor(GX_KCOLOR0, kc);
+    kc.r = k->k1[0]; kc.g = k->k1[1]; kc.b = k->k1[2]; kc.a = 0;
+    GX_SetTevKColor(GX_KCOLOR1, kc);
+    kc.r = k->k2[0]; kc.g = k->k2[1]; kc.b = k->k2[2];
+    GX_SetTevKColor(GX_KCOLOR2, kc);
+    kc.r = k->k3[0]; kc.g = k->k3[1]; kc.b = k->k3[2];
+    GX_SetTevKColor(GX_KCOLOR3, kc);
+
+    /* Luma uses texture coordinate 0, chroma (half size, own padding) coordinate 1. */
+    GX_SetNumTexGens(2);
+    GX_SetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX1, GX_IDENTITY);
+    GX_SetVtxDesc(GX_VA_TEX1, GX_DIRECT);
+    GX_SetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX1, GX_TEX_ST, GX_F32, 0);
+    GX_SetNumTevStages(6);
+    yuv_stage(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_TEV_KCSEL_K0_A, GX_CC_KONST, GX_CC_C0, GX_TEV_ADD, GX_CS_SCALE_1, GX_FALSE);
+    yuv_stage(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP2, GX_TEV_KCSEL_K1, GX_CC_KONST, GX_CC_CPREV, GX_TEV_ADD, GX_CS_SCALE_1, GX_FALSE);
+    yuv_stage(GX_TEVSTAGE2, GX_TEXCOORD1, GX_TEXMAP2, GX_TEV_KCSEL_K2, GX_CC_KONST, GX_CC_CPREV, GX_TEV_SUB, GX_CS_SCALE_1, GX_FALSE);
+    yuv_stage(GX_TEVSTAGE3, GX_TEXCOORD1, GX_TEXMAP1, GX_TEV_KCSEL_K0, GX_CC_RASC, GX_CC_CPREV, GX_TEV_ADD, GX_CS_SCALE_1, GX_FALSE);
+    yuv_stage(GX_TEVSTAGE4, GX_TEXCOORD1, GX_TEXMAP1, GX_TEV_KCSEL_K3, GX_CC_KONST, GX_CC_CPREV, GX_TEV_ADD, GX_CS_SCALE_1, GX_FALSE);
+    yuv_stage(GX_TEVSTAGE5, GX_TEXCOORD1, GX_TEXMAP1, GX_TEV_KCSEL_K0, GX_CC_KONST, GX_CC_CPREV, GX_TEV_SUB, GX_CS_SCALE_2, GX_TRUE);
+
+    GX_Begin(GX_QUADS, GX_VTXFMT0, 4);
+    GX_Position2f32(x, y);
+    GX_Color1u32(col);
+    GX_TexCoord2f32(0, 0);
+    GX_TexCoord2f32(0, 0);
+    GX_Position2f32(x + w, y);
+    GX_Color1u32(col);
+    GX_TexCoord2f32(ys, 0);
+    GX_TexCoord2f32(cs, 0);
+    GX_Position2f32(x + w, y + h);
+    GX_Color1u32(col);
+    GX_TexCoord2f32(ys, yt);
+    GX_TexCoord2f32(cs, ct);
+    GX_Position2f32(x, y + h);
+    GX_Color1u32(col);
+    GX_TexCoord2f32(0, yt);
+    GX_TexCoord2f32(0, ct);
+    GX_End();
+
+    /* Back to the one-stage setup used by everything else. */
+    GX_SetNumTevStages(1);
+    GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+    GX_SetNumTexGens(1);
+    GX_SetVtxDesc(GX_VA_TEX1, GX_NONE);
+    cur_mode = MODE_NONE;
+    cur_tex = NULL;
 }
 
 void dr_clip(float x, float y, float w, float h)

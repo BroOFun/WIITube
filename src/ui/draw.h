@@ -6,6 +6,7 @@
 #define WIITUBE_DRAW_H
 
 #include <stdint.h>
+#include "../core/convert.h"
 #include "../core/image.h"
 
 typedef uint32_t rgba_t; /* 0xRRGGBBAA */
@@ -22,6 +23,8 @@ void dr_vgradient(float x, float y, float w, float h, rgba_t top, rgba_t bottom)
 void dr_atlas(float x, float y, float w, float h, float ax, float ay, float aw, float ah, rgba_t c);
 /* Image (thumbnail, video frame, logo). Only the alpha of tint is used. */
 void dr_image(const wt_image *img, float x, float y, float w, float h, uint8_t alpha);
+/* Video frame: planar YUV textures, converted to RGB by the GPU (see core/yuv_tev.h). */
+void dr_video(const yuv_frame *f, float x, float y, float w, float h);
 /* Restrict drawing to a rectangle (w <= 0 turns clipping off). */
 void dr_clip(float x, float y, float w, float h);
 

@@ -16,7 +16,7 @@ enum { SLOT_FREE, SLOT_READY, SLOT_SHOWN };
 
 typedef struct {
     void *raw;
-    uint16_t *tex; /* 32-byte aligned for the GPU */
+    yuv_frame f;   /* planes point into raw, each 32-byte aligned for the GPU */
     double pts;
     int state;
 } slot;
@@ -27,8 +27,10 @@ struct vqueue {
     void *clock_ud;
     vq_flush_fn flush;
     int base_skip, skip;
-    int fw, fh, tw, th;
-    size_t tex_bytes;
+    int fw, fh;
+    size_t ybytes, cbytes;
+    uint64_t decode_us, convert_us; /* totals, for the averages in vq_stats */
+    int converted;
     slot slots[NSLOTS];
     int wr, rd, shown;
     int stop, eof;
@@ -58,6 +60,7 @@ static void *worker(void *arg)
         slot *s;
         double now, late;
         int rc;
+        uint64_t t0, t1, t2;
 
         wt_mutex_lock(q->mu);
         while (!q->stop && q->slots[q->wr].state != SLOT_FREE)
@@ -69,7 +72,9 @@ static void *worker(void *arg)
         s = &q->slots[q->wr];
         wt_mutex_unlock(q->mu);
 
+        t0 = wt_time_us();
         rc = media_next_video(q->m, &fr);
+        t1 = wt_time_us();
         if (rc <= 0) {
             if (rc < 0)
                 wlog("video: decode failed (%d)", rc);
@@ -79,6 +84,7 @@ static void *worker(void *arg)
         late = now >= 0 ? now - fr.pts : 0;
         wt_mutex_lock(q->mu);
         q->st.decoded++;
+        q->decode_us += t1 - t0;
         if (late > LATE_DROP)
             q->st.late_drops++;
         wt_mutex_unlock(q->mu);
@@ -94,12 +100,21 @@ static void *worker(void *arg)
             wlog("video: frame size changed to %dx%d, skipping", fr.width, fr.height);
             continue;
         }
-        conv_yuv420_to_rgb565_tiled(fr.plane[0], fr.stride[0], fr.plane[1], fr.stride[1], fr.plane[2],
-                                    fr.stride[2], fr.width, fr.height, fr.bt709, s->tex);
-        if (q->flush)
-            q->flush(s->tex, q->tex_bytes);
+        /* Only rearrange the planes into GPU tiles; the GPU converts YUV to RGB. */
+        conv_plane_to_i8(fr.plane[0], fr.stride[0], fr.width, fr.height, (uint8_t *)s->f.y);
+        conv_plane_to_i8(fr.plane[1], fr.stride[1], s->f.cw, s->f.ch, (uint8_t *)s->f.u);
+        conv_plane_to_i8(fr.plane[2], fr.stride[2], s->f.cw, s->f.ch, (uint8_t *)s->f.v);
+        s->f.bt709 = fr.bt709;
+        if (q->flush) {
+            q->flush((void *)s->f.y, q->ybytes);
+            q->flush((void *)s->f.u, q->cbytes);
+            q->flush((void *)s->f.v, q->cbytes);
+        }
+        t2 = wt_time_us();
 
         wt_mutex_lock(q->mu);
+        q->convert_us += t2 - t1;
+        q->converted++;
         s->pts = fr.pts;
         s->state = SLOT_READY;
         q->wr = (q->wr + 1) % NSLOTS;
@@ -128,21 +143,35 @@ vqueue *vq_start(media *m, vq_clock_fn clock, void *clock_ud, vq_flush_fn flush,
     q->skip = -1;
     q->fw = media_width(m);
     q->fh = media_height(m);
-    q->tw = conv_tex_dim(q->fw);
-    q->th = conv_tex_dim(q->fh);
-    q->tex_bytes = (size_t)q->tw * q->th * 2;
     q->shown = -1;
     q->mu = wt_mutex_new();
     q->cv = wt_cond_new();
     for (i = 0; i < NSLOTS; i++) {
-        q->slots[i].raw = malloc(q->tex_bytes + 32);
+        yuv_frame *f = &q->slots[i].f;
+        uintptr_t p;
+        f->w = q->fw;
+        f->h = q->fh;
+        f->yw = conv_i8_w(f->w);
+        f->yh = conv_i8_h(f->h);
+        f->cw = (f->w + 1) / 2;
+        f->ch = (f->h + 1) / 2;
+        f->cwt = conv_i8_w(f->cw);
+        f->cht = conv_i8_h(f->ch);
+        q->ybytes = (size_t)f->yw * f->yh;
+        q->cbytes = (size_t)f->cwt * f->cht;
+        q->slots[i].raw = malloc(q->ybytes + 2 * q->cbytes + 3 * 32);
         if (!q->slots[i].raw)
             break;
-        q->slots[i].tex = (uint16_t *)(((uintptr_t)q->slots[i].raw + 31) & ~(uintptr_t)31);
+        p = ((uintptr_t)q->slots[i].raw + 31) & ~(uintptr_t)31;
+        f->y = (const uint8_t *)p;
+        p = (p + q->ybytes + 31) & ~(uintptr_t)31;
+        f->u = (const uint8_t *)p;
+        p = (p + q->cbytes + 31) & ~(uintptr_t)31;
+        f->v = (const uint8_t *)p;
     }
     if (i < NSLOTS || !q->mu || !q->cv) {
-        wlog("video: setup failed (%d/%d textures of %u bytes, mutex %s, cond %s)", i, NSLOTS,
-             (unsigned)q->tex_bytes, q->mu ? "ok" : "FAILED", q->cv ? "ok" : "FAILED");
+        wlog("video: setup failed (%d/%d frame buffers of %u bytes, mutex %s, cond %s)", i, NSLOTS,
+             (unsigned)(q->ybytes + 2 * q->cbytes), q->mu ? "ok" : "FAILED", q->cv ? "ok" : "FAILED");
         q->thread = NULL;
         vq_stop(q);
         return NULL;
@@ -157,7 +186,7 @@ vqueue *vq_start(media *m, vq_clock_fn clock, void *clock_ud, vq_flush_fn flush,
     return q;
 }
 
-int vq_poll(vqueue *q, double now, const uint16_t **tex)
+int vq_poll(vqueue *q, double now, const yuv_frame **frame)
 {
     int changed = 0;
     wt_mutex_lock(q->mu);
@@ -174,7 +203,7 @@ int vq_poll(vqueue *q, double now, const uint16_t **tex)
             q->slots[q->shown].state = SLOT_FREE;
         q->shown = q->rd;
         q->slots[q->rd].state = SLOT_SHOWN;
-        *tex = q->slots[q->rd].tex;
+        *frame = &q->slots[q->rd].f;
         q->rd = next;
         q->st.shown++;
         changed = 1;
@@ -208,8 +237,6 @@ int vq_finished(vqueue *q)
     return done;
 }
 
-int vq_tex_width(const vqueue *q) { return q->tw; }
-int vq_tex_height(const vqueue *q) { return q->th; }
 int vq_frame_width(const vqueue *q) { return q->fw; }
 int vq_frame_height(const vqueue *q) { return q->fh; }
 
@@ -218,6 +245,8 @@ void vq_get_stats(vqueue *q, vq_stats *out)
     wt_mutex_lock(q->mu);
     *out = q->st;
     out->skip_level = q->skip;
+    out->decode_ms = q->st.decoded ? q->decode_us / 1000.0 / q->st.decoded : 0;
+    out->convert_ms = q->converted ? q->convert_us / 1000.0 / q->converted : 0;
     wt_mutex_unlock(q->mu);
 }
 

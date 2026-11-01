@@ -29,7 +29,7 @@
 #include "wii.h"
 
 #ifndef APP_VERSION
-#define APP_VERSION "0.3"
+#define APP_VERSION "0.4"
 #endif
 #define APP_DIR "sd:/apps/wiitube"
 #define RULES_URL "https://raw.githubusercontent.com/BroOFun/wiitube/main/rules/youtube.json"
@@ -144,14 +144,18 @@ static void log_memory(const char *where)
     wlog("memory (%s): heap used %u KB, available about %u KB", where, (unsigned)mi.uordblks / 1024, free_kb());
 }
 
+#define DEFAULT_QUALITY 480
+#define SETTINGS_VERSION 2 /* v0.4: 480p became the default; older saved choices are reset */
+
 static int load_quality(void)
 {
     FILE *f;
-    int q = 240;
+    int q = DEFAULT_QUALITY, version = 0;
     if (!g_sd || !(f = fopen(APP_DIR "/settings.txt", "r")))
         return q;
-    if (fscanf(f, "quality=%d", &q) != 1 || (q != 144 && q != 240 && q != 360 && q != 480))
-        q = 240;
+    if (fscanf(f, "quality=%d\nversion=%d", &q, &version) < 1 || version < SETTINGS_VERSION ||
+        (q != 144 && q != 240 && q != 360 && q != 480))
+        q = DEFAULT_QUALITY;
     fclose(f);
     return q;
 }
@@ -160,7 +164,7 @@ static void save_quality(int q)
 {
     FILE *f;
     if (g_sd && (f = fopen(APP_DIR "/settings.txt", "w"))) {
-        fprintf(f, "quality=%d\n", q);
+        fprintf(f, "quality=%d\nversion=%d\n", q, SETTINGS_VERSION);
         fclose(f);
     }
 }
@@ -345,11 +349,12 @@ typedef struct {
     int ok;
 } open_job;
 
-/* Rough memory needed to play at this size (buffers, textures, decoder frames). */
+/* Rough memory needed to play at this size: download buffers, 3 planar frame textures,
+ * up to 16 decoder frames (H.264 reference frames + output), and some slack. */
 static unsigned needed_kb(int w, int h)
 {
     unsigned frame = (unsigned)w * h * 3 / 2;
-    return (VIDEO_BUFFER + AUDIO_BUFFER) / 1024 + 3u * w * h * 2 / 1024 + 16u * frame / 1024 + 4096;
+    return (VIDEO_BUFFER + AUDIO_BUFFER) / 1024 + 3u * frame / 1024 + 16u * frame / 1024 + 4096;
 }
 
 static void *open_main(void *arg)
@@ -459,8 +464,8 @@ static void play_video(const yt_search_result *r, int quality)
     play_clock clk = { 0, 0, 0 };
     player_view pv;
     ui_input in;
-    wt_image frame;
-    int have_frame = 0, audio_live, starting = 1, idle = 0, cancelled = 0;
+    const yuv_frame *frame = NULL;
+    int audio_live, starting = 1, idle = 0, cancelled = 0;
     char loading[300];
     vq_stats st;
 
@@ -516,7 +521,7 @@ static void play_video(const yt_search_result *r, int quality)
     for (;;) {
         int act;
         double now;
-        const uint16_t *tex;
+        const yuv_frame *next;
 
         read_input(&in);
         act = player_update(&pv, &in);
@@ -540,10 +545,8 @@ static void play_video(const yt_search_result *r, int quality)
         }
 
         now = clock_now(&clk);
-        if (!starting && !pv.paused && vq_poll(q, now, &tex)) {
-            image_wrap_rgb565(&frame, tex, vq_frame_width(q), vq_frame_height(q), vq_tex_width(q),
-                              vq_tex_height(q));
-            have_frame = 1;
+        if (!starting && !pv.paused && vq_poll(q, now, &next)) {
+            frame = next;
             idle = 0;
         } else if (!pv.paused) {
             idle++;
@@ -554,10 +557,10 @@ static void play_video(const yt_search_result *r, int quality)
 
         gfx_frame_begin();
         dr_fill(0, 0, ui_width(), UI_H, 0x000000ffu);
-        if (have_frame) {
+        if (frame) {
             float x, y, w, h;
-            ui_fit(frame.w, frame.h, &x, &y, &w, &h);
-            dr_image(&frame, x, y, w, h, 255);
+            ui_fit(frame->w, frame->h, &x, &y, &w, &h);
+            dr_video(frame, x, y, w, h); /* the GPU converts YUV to RGB */
         }
         player_draw_overlay(&pv);
         if (in.pointer && pv.overlay_timer > 0)
@@ -574,8 +577,10 @@ static void play_video(const yt_search_result *r, int quality)
     if (o.as)
         ring_abort(yt_stream_ring(o.as));
     vq_get_stats(q, &st);
-    wlog("played %s: decoded %d, shown %d, dropped %d, audio underruns %d, skip level %d", o.video_id, st.decoded,
-         st.shown, st.late_drops, audio_underruns(), st.skip_level);
+    wlog("played %s at %dp: decoded %d, shown %d, dropped %d, audio underruns %d, skip level %d, "
+         "avg decode %.1f ms + prepare %.1f ms per frame",
+         o.video_id, o.vf->height, st.decoded, st.shown, st.late_drops, audio_underruns(), st.skip_level,
+         st.decode_ms, st.convert_ms);
     vq_stop(q);
     close_playback(&o);
     log_memory("after playback");

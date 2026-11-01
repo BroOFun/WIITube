@@ -61,7 +61,7 @@ $(BUILD)/rules_builtin.o: $(BUILD)/rules_builtin.c
 FFMPEG_CFLAGS := $(shell pkg-config --cflags libavformat libavcodec libavutil 2>/dev/null)
 FFMPEG_LIBS   := $(shell pkg-config --libs libavformat libavcodec libavutil 2>/dev/null)
 TEST_MEDIA_SRCS := tests/test_media.c src/core/media.c src/core/ring.c src/core/convert.c src/core/log.c \
-                   src/core/vqueue.c \
+                   src/core/vqueue.c src/core/yuv_tev.c \
                    src/platform/linux/thread_posix.c
 
 $(BUILD)/test_media: $(TEST_MEDIA_SRCS) $(wildcard src/core/*.h)
@@ -81,7 +81,8 @@ test-thumbs: $(BUILD)/test_thumbs
 
 # Screenshots of the Wii UI rendered in software: make ui-preview (PNGs in build/linux/preview)
 UI_PREVIEW_SRCS := tests/ui_preview.c src/ui/screens.c src/ui/ui_common.c src/ui/atlas_data.c \
-                   src/platform/linux/soft_draw.c src/platform/wii/logo_data.c src/core/image.c src/core/convert.c
+                   src/platform/linux/soft_draw.c src/platform/wii/logo_data.c src/core/image.c src/core/convert.c \
+                   src/core/yuv_tev.c
 
 $(BUILD)/ui_preview: $(UI_PREVIEW_SRCS) $(wildcard src/ui/*.h src/core/*.h)
 	@mkdir -p $(dir $@)
@@ -97,6 +98,7 @@ ui-preview: $(BUILD)/ui_preview
 #   make build/linux/ui_live && build/linux/ui_live "wii sports" OUTDIR
 UI_LIVE_SRCS := tests/ui_live.c src/ui/screens.c src/ui/ui_common.c src/ui/atlas_data.c \
                 src/platform/linux/soft_draw.c src/platform/wii/logo_data.c src/core/image.c src/core/convert.c \
+                src/core/yuv_tev.c \
                 src/core/thumbs.c src/core/http.c src/core/yt.c src/core/log.c src/platform/linux/net_linux.c \
                 src/platform/linux/thread_posix.c third_party/cJSON/cJSON.c
 
@@ -105,7 +107,14 @@ $(BUILD)/ui_live: $(UI_LIVE_SRCS) $(BUILD)/libmbedtls.a $(BUILD)/rules_builtin.o
 	$(CC) $(CFLAGS) $(APP_FLAGS) $(MBED_DEF) $(INCS) -Ithird_party/stb -o $@ $(UI_LIVE_SRCS) \
 	    $(BUILD)/rules_builtin.o $(BUILD)/libmbedtls.a -lz -lpthread
 
-test: test-media test-thumbs
+$(BUILD)/test_yuv_tev: tests/test_yuv_tev.c src/core/yuv_tev.c src/core/yuv_tev.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(APP_FLAGS) -o $@ tests/test_yuv_tev.c src/core/yuv_tev.c -lm
+
+test-yuv: $(BUILD)/test_yuv_tev
+	$(BUILD)/test_yuv_tev
+
+test: test-yuv test-media test-thumbs
 
 test-media: $(BUILD)/test_media
 	sh tests/make_clips.sh $(BUILD)/clips
@@ -114,4 +123,4 @@ test-media: $(BUILD)/test_media
 clean:
 	rm -rf build wiitube-cli
 
-.PHONY: all clean test test-media test-thumbs ui-preview
+.PHONY: all clean test test-yuv test-media test-thumbs ui-preview

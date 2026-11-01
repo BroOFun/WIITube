@@ -1,5 +1,7 @@
 #!/bin/sh
 # Cross-compiles a minimal FFmpeg for the Wii: H.264 + AAC decoders, MP4 demuxer only.
+# Speed: FFmpeg's default -O3 (don't override it), no checked bitstream reader, tables
+# built in at compile time. (The PowerPC asm in FFmpeg is AltiVec, which the Wii lacks.)
 # Run inside the devkitpro/devkitppc container. Usage: sh deps/build_ffmpeg_wii.sh PREFIX
 set -eu
 
@@ -29,7 +31,7 @@ cd "$SRC"
     --prefix="$PREFIX" \
     --enable-cross-compile --cross-prefix=powerpc-eabi- \
     --arch=ppc --cpu=750 --target-os=none \
-    --extra-cflags="$MACHDEP -O2 -I$DEVKITPRO/libogc/include" \
+    --extra-cflags="$MACHDEP -I$DEVKITPRO/libogc/include" \
     --extra-ldflags="$MACHDEP -L$DEVKITPRO/libogc/lib/wii" \
     --extra-libs="-logc -lm" \
     --pkg-config=false \
@@ -38,6 +40,7 @@ cd "$SRC"
     --disable-pthreads --disable-w32threads --disable-os2threads \
     --disable-avdevice --disable-swscale --disable-swresample --disable-avfilter \
     --disable-asm --disable-runtime-cpudetect \
+    --disable-safe-bitstream-reader --enable-hardcoded-tables \
     --enable-avcodec --enable-avformat --enable-avutil \
     --enable-decoder=h264 --enable-decoder=aac \
     --enable-parser=h264 --enable-parser=aac \
