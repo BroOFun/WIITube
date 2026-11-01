@@ -83,6 +83,25 @@ The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cl
    Only change C code if the request/response *shape* changed.
 3. Bump `rules_version`/`updated`, then test with `wiitube-cli info` and `get`.
 
+## Status (2026-11-01, night) — v0.3
+- v0.2 on hardware: video playback works (user confirmed). v0.3 = YouTube-style UI:
+  - `src/ui/` (portable): `draw.h` API (fill, gradient, atlas region, image, clip) on a
+    virtual canvas `ui_width()` x 480 (854 on 16:9, 640 on 4:3); `ui_common.c` (text from the
+    Roboto atlas, round rects via circle/inverse-corner atlas pieces, spinner, cursor);
+    `screens.c` (browse grid + search pill + chips, keyboard, player overlay, messages).
+  - Backends: `src/platform/wii/gfx.c` (GX; TEV "mask" mode = vertex colour x atlas alpha,
+    "image" mode = modulate; ortho projection maps the virtual canvas to the 640 EFB) and
+    `src/platform/linux/soft_draw.c` (software, for `make ui-preview` PNGs).
+  - `tools/make_atlas.py` (fonts+icons -> `src/ui/atlas_data.c`), `tools/make_logo.py`.
+  - Thumbnails: `src/core/thumbs.c` (2 worker threads, LRU 48) fetch
+    `i.ytimg.com/vi/<id>/mqdefault.jpg`, `image.c` decodes (stb_image) to 160x90 RGB565.
+  - http.c keep-alive pool (POOL_MAX 6, 20 s idle) — big win for thumbnails.
+  - main.c: background job thread for connect/search/open; player loop draws video via
+    dr_image of the vqueue texture; Wii Remote IR pointer (WPAD_SetVRes = canvas size);
+    quality 144/240/360/480 saved in `sd:/apps/wiitube/settings.txt`; memory estimate check
+    before playback (needed_kb vs free_kb) and memory logged after each video.
+- Next the user wants Shorts.
+
 ## Status (2026-11-01, evening)
 - First hardware test (Wii U vWii, v0.1): network, TLS and **search work**; starting a video
   failed with "Out of memory". Cause: libogc (tuxedo) has a fixed pool of 64 LWP mutexes and

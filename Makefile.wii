@@ -10,7 +10,7 @@ ifeq ($(strip $(DEVKITPPC)),)
 $(error DEVKITPPC is not set; build inside the devkitpro/devkitppc container)
 endif
 
-APP_VERSION   ?= 0.2
+APP_VERSION   ?= 0.3
 FFMPEG_PREFIX ?= build/ffmpeg-wii
 CACERT        ?= deps/src/cacert.pem
 
@@ -26,14 +26,15 @@ MBED    := deps/src/mbedtls
 MACHDEP := -DGEKKO -mrvl -mcpu=750 -meabi -mhard-float
 DEFS    := -DWIITUBE_PLATFORM_WII -DWIITUBE_HAVE_ZLIB -DAPP_VERSION='"$(APP_VERSION)"' \
            -DMBEDTLS_USER_CONFIG_FILE='"wiitube_mbedtls_user.h"'
-INCS    := -Isrc/core -Isrc/platform/wii -I$(MBED)/include -Ithird_party/cJSON \
+INCS    := -Isrc/core -Isrc/platform/wii -I$(MBED)/include -Ithird_party/cJSON -Ithird_party/stb \
            -I$(LIBOGC)/include -I$(PORTLIBS)/include -I$(FFMPEG_PREFIX)/include
 CFLAGS  := -O2 -g -std=gnu99 -Wall -Wno-unused-parameter -Wno-format-truncation $(MACHDEP) $(DEFS) $(INCS)
 LDFLAGS := $(MACHDEP) -Wl,-Map,$(BUILD)/wiitube.map -L$(FFMPEG_PREFIX)/lib -L$(LIBOGC)/lib/wii -L$(PORTLIBS)/lib
 LIBS    := -lavformat -lavcodec -lavutil -lz -lfat -lwiiuse -lbte -lasnd -logc -lm
 
 APP_SRCS := src/core/http.c src/core/yt.c src/core/ring.c src/core/stream.c src/core/media.c \
-            src/core/convert.c src/core/vqueue.c src/core/log.c third_party/cJSON/cJSON.c \
+            src/core/convert.c src/core/vqueue.c src/core/log.c src/core/image.c src/core/thumbs.c \
+            src/ui/screens.c src/ui/ui_common.c src/ui/atlas_data.c third_party/cJSON/cJSON.c \
             src/platform/wii/main.c src/platform/wii/gfx.c src/platform/wii/audio.c \
             src/platform/wii/net_wii.c src/platform/wii/thread_wii.c src/platform/wii/logo_data.c
 APP_OBJS := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS)) $(BUILD)/rules_builtin.o $(BUILD)/cacert.o
@@ -65,7 +66,7 @@ $(BUILD)/mbedtls/%.o: $(MBED)/library/%.c src/core/wiitube_mbedtls_user.h src/pl
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -I$(MBED)/library -c $< -o $@
 
-$(BUILD)/%.o: %.c $(wildcard src/core/*.h src/platform/wii/*.h)
+$(BUILD)/%.o: %.c $(wildcard src/core/*.h src/ui/*.h src/platform/wii/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
