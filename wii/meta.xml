@@ -5,10 +5,11 @@
   <version>@VERSION@</version>
   <release_date>@DATE@</release_date>
   <short_description>Standalone YouTube player</short_description>
-  <long_description>Search and watch YouTube directly on the Wii, with no PC or proxy server.
+  <long_description>Search and watch YouTube and Shorts directly on the Wii, with no PC or proxy server.
 
-Point with the Wii Remote or use the D-Pad. A selects, B goes back, + opens search, 1 changes quality (480p by default), HOME exits.
-While playing: A pauses, +/- change the volume, B returns to the videos.
+Browsing: point with the Wii Remote or use the D-Pad. A selects, B goes Home, + opens search, 1 changes the default quality (480p), HOME exits. The rail on the left switches between Home, Shorts and Search; the WiiTube logo goes Home. Drag the scrollbar on the right with A (or use the Nunchuk stick); more videos load as you scroll.
+Videos: A pauses, Left/Right (or the Nunchuk stick) skip 10 seconds, point at the progress bar and press A to jump, 1 turns captions on/off, 2 opens settings (quality, captions, audio track), +/- or Up/Down change the volume, B goes back.
+Shorts: Up/Down go to the previous/next Short.
 
 A log is written to sd:/apps/wiitube/wiitube.log.</long_description>
 </app>

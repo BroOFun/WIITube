@@ -415,7 +415,7 @@ static void poll_captions(player *p)
     s->cc = g_cc.out;
     s->have_cc = 1;
     ui_ascii(p->pv.cc_label, sizeof p->pv.cc_label, s->cc.label);
-    p->pv.cc_on = 1;
+    p->pv.cc_on = g_settings.captions; /* unless turned off again while loading */
     p->pv.notice_timer = 0;
     wlog("captions: %s, %d cues", s->cc.label, s->cc.n);
 }

@@ -1035,7 +1035,8 @@ void browse_draw(browse_state *b, ui_thumb_fn thumb, void *ud)
     dr_fill(0, 0, ui_width(), UI_H, C_BG);
     if (last_row(nrows) < 0) {
         const float cx = content_x() + content_w() / 2;
-        const int loading = has_shelf_page(b->page) ? pg->loading_videos : pg->loading_shorts;
+        const int loading = (has_shelf_page(b->page) ? pg->loading_videos : pg->loading_shorts) ||
+                            (!pg->started && !pg->failed);
         char m[300];
         if (loading) {
             ui_spinner(cx, 250, 18, b->frame);

@@ -29,7 +29,6 @@
 #endif
 #define RULES_URL "https://raw.githubusercontent.com/BroOFun/wiitube/main/rules/youtube.json"
 #define THUMB_URL "https://i.ytimg.com/vi/%s/mqdefault.jpg"
-#define SHORT_THUMB_W 120 /* vertical thumbnails (405x720) are shrunk to about this width */
 
 extern const int logo_small_w, logo_small_h, logo_splash_w, logo_splash_h;
 extern const unsigned char logo_small_rgba[], logo_splash_rgba[];
@@ -384,8 +383,13 @@ static void feed_collect(browse_state *b, int which)
         wlog("load %s for \"%s\" failed: %s", which == FEED_VIDEOS ? "videos" : "Shorts", fj->result.query, fj->err);
         /* Only an empty page shows the error; a failed Shorts shelf just stays away. */
         if (which == FEED_VIDEOS || fj->page == PAGE_SHORTS) {
+            if (fj->first) /* so "try again" starts over */
+                pg->started &= ~(which == FEED_VIDEOS ? 1 : 2);
             pg->failed = 1;
             snprintf(pg->status, sizeof pg->status, "Couldn't load videos: %s", fj->err);
+        } else {
+            free(pg->shorts.continuation); /* stop asking for more Shorts for the shelf */
+            pg->shorts.continuation = NULL;
         }
         yt_feed_free(&fj->result);
         return;
@@ -430,18 +434,13 @@ static void play_tick(void *ud, int need_more)
 
 /* ---- main ---------------------------------------------------------------------------------- */
 
+/* Shorts use the normal 16:9 thumbnail, cropped to 9:16 when drawn: the vertical picture
+ * URLs YouTube lists (oardefault/oar2 with signed parameters) are served as WebP, which
+ * stb_image can't decode, and the plain oar2.jpg is 1080x1920 (too big to decode on a Wii). */
 static const wt_image *thumb_cb(void *ud, const yt_search_result *r, int vertical)
 {
     (void)ud;
-    if (vertical && r->thumb_url[0]) {
-        char key[24];
-        const wt_image *img;
-        snprintf(key, sizeof key, "s:%s", r->video_id);
-        img = thumbs_get_url(g_thumbs, key, r->thumb_url, SHORT_THUMB_W);
-        if (img || !thumbs_failed(g_thumbs, key))
-            return img;
-        /* The vertical picture didn't load: use the normal one (cropped when drawn). */
-    }
+    (void)vertical;
     return thumbs_get(g_thumbs, r->video_id);
 }
 

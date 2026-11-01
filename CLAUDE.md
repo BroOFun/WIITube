@@ -17,14 +17,18 @@ low-resolution H.264 (144p–360p, ≤30fps). Read this file fully before workin
   - `wiitube_mbedtls_user.h`: mbedTLS config tweaks (entropy via `plat_entropy`).
   - `ring.c` (blocking byte buffer), `stream.c` (download thread -> ring), `media.c` (FFmpeg
     demux/decode of non-seekable fMP4 from a ring), `convert.c` (YUV420 -> GX tiled RGB565),
-    `vqueue.c` (decode thread + 3 texture slots + adaptive frame skipping), `thread.h`, `log.c`.
+    `vqueue.c` (decode thread + 6 planar texture slots + adaptive frame skipping), `thread.h`, `log.c`,
+    `feed.c` (growing result lists), `seekidx.c` (sidx parser), `captions.c` (json3 captions),
+    `thumbs.c` / `image.c` (thumbnail cache, JPEG decode), `yuv_tev.c` (GPU colour model).
 - `src/platform/linux/`: desktop `net.h` + pthreads.
-- `src/platform/wii/`: Wii app. `main.c` (keyboard search, results, player loop), `gfx.c`
+- `src/platform/wii/`: Wii app. `main.c` (startup, input, browse loop, page loading),
+  `player.c` (playback, seeking, captions, Shorts), `gfx.c`
   (console menus + GX video quad + progress bar), `audio.c` (ASND double-buffered voice,
   lock-free ring, clock from block start ticks), `net_wii.c` (if_config, net_*, 8 KiB I/O cap,
   IOS-timing entropy, built-in CA), `thread_wii.c` (LWP + mbedTLS THREADING_ALT).
   Platform functions are named `plat_*` because libogc already owns `net_*`.
-- `src/cli/main.c`: `wiitube-cli` test harness (`fetch`, `search`, `info`, `get`).
+- `src/cli/main.c`: `wiitube-cli` test harness (`fetch`, `search`, `info`, `get`, `seek`,
+  `captions`, `dump`).
 - `rules/youtube.json`: **client identities and endpoints, kept out of the C code** so
   fixes are mostly data changes. Embedded at build time as the fallback; the Wii app
   will download the latest copy from this repo
@@ -83,6 +87,55 @@ The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cl
    Only change C code if the request/response *shape* changed.
 3. Bump `rules_version`/`updated`, then test with `wiitube-cli info` and `get`.
 
+## Status (2026-11-01, late) — v0.5: browse/player overhaul (not yet tested on hardware)
+- User asked for: home recommendations reachable while browsing, QWERTY keyboard, a sidebar
+  for pointer scrolling, endless results (home + search), Shorts (Down = next), seeking
+  (progress-bar click, D-pad/Nunchuk ±5-10 s), captions on a button, English by default,
+  choosing auto-dubbed audio tracks, WiiTube logo = Home, a smoother logo, and changing the
+  quality during playback. All implemented; the Wii build and live CI checks pass.
+- Data (`yt.c`, `feed.c`, `seekidx.c`, `captions.c`; tested by `make test-ytdata` against real
+  responses in `tests/fixtures/`, captured with `wiitube-cli dump`):
+  - Endless feeds: `yt_feed_start` (search with params Videos `EgIQAQ==` / Shorts `EgIQCQ==`),
+    `yt_feed_more` (continuation token). Paging runs in a job on a *separate* feed made by
+    `yt_feed_cursor`; the main thread merges it with `yt_feed_merge`, so the UI never reads a
+    list that another thread is changing. Shorts: `shortsLockupViewModel` (vertical
+    `oar2.jpg` thumbnail URL with signed params) or `videoRenderer` with a `/shorts/` URL.
+    Logged-out "home" has no recommendations, so Home = topic-chip searches.
+  - Captions: `captionTracks[].baseUrl` + `&fmt=json3` (+ `&tlang=en` to translate); English
+    track preferred, real over auto-generated.
+  - Audio tracks: format `audioTrack` (id like `en.4`, displayName, audioIsDefault); the
+    picker prefers English / "original", avoids descriptive and DRC tracks. Not yet seen
+    live on CI (the dubbed test video hit a bot check); field names are from yt-dlp.
+  - Seeking: each DASH format has `initRange` (ftyp+moov) and `indexRange` (sidx). The sidx
+    gives subsegments (~5 s video, ~10 s audio). `yt_stream_start_at` downloads
+    [0, init_end] then [offset, end): FFmpeg sees a valid fragmented file starting at a
+    keyframe, with absolute times from the `tfdt` boxes (`media_expect_start` shifts them
+    if a file lacks tfdt). Playback starts at the video piece's start; audio before it is
+    dropped in `feed_audio`. Verified live: `wiitube-cli seek dQw4w9WgXcQ 60` -> first frame
+    55.400 s exactly as the index says (smoke test step `seek-timestamps`).
+- UI (`src/ui/browse.c`, `keyboard.c`, `player_ui.c`; `screens.c` is gone): left rail
+  Home/Shorts/Search, topic chips, video grid with a Shorts shelf after 2 rows, Shorts page
+  grid, scrollbar draggable with A held (`ui_input.held`), Nunchuk stick scroll
+  (`ui_input.stick_x/y`), footer spinner while the next page loads (`want_videos` /
+  `want_shorts` flags tell main.c what to load). Player: back button, progress bar with
+  hover time, 10 s nudges collected for 0.6 s before one seek, CC button, gear menu
+  (quality / captions / audio track), notices, vertical Shorts layout with up/down buttons.
+  `make ui-preview` renders all of it (incl. Shorts and menus).
+- Wii app split: `main.c` (input, settings, two feed job slots, browse loop), `player.c`
+  (session: start job = lookup + pick + seek index + streams + decoders; restart for
+  seek/quality/audio; captions job; Shorts list navigation with loop; quality for Shorts
+  capped at 360p by default since they are shown 270 px wide), `app.h` (shared).
+  settings.txt now also stores `captions=0/1`.
+- Thumbnails: Shorts use the normal `mqdefault.jpg` cropped to 9:16 when drawn (`draw_cover`,
+  `dr_image_part`). Checked live: the vertical URLs in search results (`oardefault.jpg`/
+  `oar2.jpg` with `sqp`/`rs` params) are served as **WebP** (stb_image can't decode), plain
+  `oar2.jpg` is a 1080x1920 JPEG (too big for the Wii), `frame0.jpg` is a 268x480 JPEG of
+  the first frame. `thumbs_get_url` (any URL, own size) stays available.
+- Logo: `tools/make_logo.py` now draws it from shapes at high resolution (no source image).
+- Next: user's hardware test of v0.5 (ask for wiitube.log: seek timing, Shorts, captions);
+  possible follow-ups: preloading the next Short, precise seeking (decode-and-drop to the
+  exact time), seeking for muxed formats.
+
 ## Status (2026-11-02) — v0.4: smooth 480p
 - User report on v0.3: everything works; 480p stutters (low fps) although downloading keeps up.
 - Cause: the CPU converted every frame YUV -> tiled RGB565 (~34x more work than needed; at
@@ -111,6 +164,7 @@ The downloaded video is uploaded as the `test-video` artifact. Runner IPs are cl
     "image" mode = modulate; ortho projection maps the virtual canvas to the 640 EFB) and
     `src/platform/linux/soft_draw.c` (software, for `make ui-preview` PNGs).
   - `tools/make_atlas.py` (fonts+icons -> `src/ui/atlas_data.c`), `tools/make_logo.py`.
+    (v0.5 replaced `screens.c` with browse.c / keyboard.c / player_ui.c, see above.)
   - Thumbnails: `src/core/thumbs.c` (2 worker threads, LRU 48) fetch
     `i.ytimg.com/vi/<id>/mqdefault.jpg`, `image.c` decodes (stb_image) to 160x90 RGB565.
   - http.c keep-alive pool (POOL_MAX 6, 20 s idle) — big win for thumbnails.
