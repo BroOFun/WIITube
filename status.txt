@@ -1,0 +1,5 @@
+commit:  6bd12a0
+date:    2026-11-01 23:58 UTC
+ffmpeg:  success
+app:     success
+-rw-r--r-- 1 root root 4823936 Nov  1 23:58 build/wii/boot.dol
