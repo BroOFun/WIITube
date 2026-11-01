@@ -2,7 +2,7 @@
 #ifndef WIITUBE_MBEDTLS_USER_H
 #define WIITUBE_MBEDTLS_USER_H
 
-/* Entropy always comes from net_entropy() through mbedtls_hardware_poll(),
+/* Entropy always comes from plat_entropy() through mbedtls_hardware_poll(),
  * so Linux and the Wii seed the random generator the same way. */
 #define MBEDTLS_ENTROPY_HARDWARE_ALT
 

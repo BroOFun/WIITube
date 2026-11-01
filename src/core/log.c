@@ -5,9 +5,12 @@
 #include <stdio.h>
 
 static FILE *g_log;
+static wt_mutex *g_mu; /* created in wlog_open, before other threads start */
 
 void wlog_open(const char *path)
 {
+    if (!g_mu)
+        g_mu = wt_mutex_new();
     if (path)
         g_log = fopen(path, "a");
 }
@@ -25,10 +28,14 @@ void wlog(const char *fmt, ...)
     unsigned long long ms = (unsigned long long)(wt_time_us() / 1000u);
     va_list ap;
 
+    if (g_mu)
+        wt_mutex_lock(g_mu);
     fprintf(out, "[%llu.%03llu] ", ms / 1000u, ms % 1000u);
     va_start(ap, fmt);
     vfprintf(out, fmt, ap);
     va_end(ap);
     fputc('\n', out);
     fflush(out);
+    if (g_mu)
+        wt_mutex_unlock(g_mu);
 }

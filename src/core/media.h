@@ -28,8 +28,10 @@ int media_height(const media *m);
 int media_sample_rate(const media *m);
 double media_duration(const media *m); /* seconds, 0 if unknown */
 
-/* Skip H.264 deblocking for speed (slightly blockier picture). */
-void media_set_fast(media *m, int fast);
+/* Trade quality for speed when decoding falls behind (call from the decoding thread):
+ * 0 = full quality, 1 = skip H.264 deblocking (slightly blockier),
+ * 2 = also skip non-reference frames (fewer frames shown). */
+void media_set_skip(media *m, int level);
 
 /* Decode the next video frame. Returns 1 with *out filled (valid until the next call),
  * 0 at end of stream, < 0 on error. */

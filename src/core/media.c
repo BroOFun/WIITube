@@ -159,9 +159,10 @@ double media_duration(const media *m)
     return 0;
 }
 
-void media_set_fast(media *m, int fast)
+void media_set_skip(media *m, int level)
 {
-    m->dec->skip_loop_filter = fast ? AVDISCARD_ALL : AVDISCARD_DEFAULT;
+    m->dec->skip_loop_filter = level >= 1 ? AVDISCARD_ALL : AVDISCARD_DEFAULT;
+    m->dec->skip_frame = level >= 2 ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
 }
 
 /* Get the next decoded frame into m->frame. 1 = frame, 0 = end, < 0 = error. */

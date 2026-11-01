@@ -61,6 +61,7 @@ $(BUILD)/rules_builtin.o: $(BUILD)/rules_builtin.c
 FFMPEG_CFLAGS := $(shell pkg-config --cflags libavformat libavcodec libavutil 2>/dev/null)
 FFMPEG_LIBS   := $(shell pkg-config --libs libavformat libavcodec libavutil 2>/dev/null)
 TEST_MEDIA_SRCS := tests/test_media.c src/core/media.c src/core/ring.c src/core/convert.c src/core/log.c \
+                   src/core/vqueue.c \
                    src/platform/linux/thread_posix.c
 
 $(BUILD)/test_media: $(TEST_MEDIA_SRCS) $(wildcard src/core/*.h)

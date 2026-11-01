@@ -12,7 +12,7 @@ low-resolution H.264 (144p–360p, ≤30fps). Read this file fully before workin
     picking (H.264 `avc1` ≤ height + AAC `mp4a`, or muxed), downloads using
     `&range=` 10 MiB chunks (same as yt-dlp).
   - `net.h`: platform layer (sockets, entropy, CA bundle path, proxy).
-  - `wiitube_mbedtls_user.h`: mbedTLS config tweaks (entropy via `net_entropy`).
+  - `wiitube_mbedtls_user.h`: mbedTLS config tweaks (entropy via `plat_entropy`).
 - `src/platform/linux/`: Linux `net.h`. `src/platform/wii/`: TODO (libogc `net_*`).
 - `src/cli/main.c`: `wiitube-cli` test harness (`fetch`, `search`, `info`, `get`).
 - `rules/youtube.json`: **client identities and endpoints, kept out of the C code** so

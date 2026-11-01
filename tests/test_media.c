@@ -13,6 +13,7 @@
 #include "../src/core/media.h"
 #include "../src/core/ring.h"
 #include "../src/core/thread.h"
+#include "../src/core/vqueue.h"
 
 static int failures;
 #define CHECK(cond, ...)                                    \
@@ -198,6 +199,85 @@ static void test_abort(const char *path)
     printf("abort: ok\n");
 }
 
+
+typedef struct {
+    wt_mutex *mu;
+    double t;
+} fake_clock;
+
+static double fake_now(void *ud)
+{
+    fake_clock *c = ud;
+    double t;
+    wt_mutex_lock(c->mu);
+    t = c->t;
+    wt_mutex_unlock(c->mu);
+    return t;
+}
+
+static void fake_set(fake_clock *c, double t)
+{
+    wt_mutex_lock(c->mu);
+    c->t = t;
+    wt_mutex_unlock(c->mu);
+}
+
+/* Decode worker: frames come out in order at the right time; a clock jump makes it drop
+ * frames and raise the skip level instead of falling further behind. */
+static void test_vqueue(const char *path)
+{
+    feeder fd = { path, ring_new(64 * 1024), 0 };
+    wt_thread *t = wt_thread_start(feed_main, &fd, 0, 1);
+    char err[256];
+    media *m = media_open(fd.r, MEDIA_VIDEO, err, sizeof err);
+    fake_clock clk = { wt_mutex_new(), -1 };
+    vqueue *q;
+    vq_stats st;
+    const uint16_t *tex, *last_tex = NULL;
+    int polls = 0, changes = 0, jumped = 0;
+
+    CHECK(m != NULL, "media_open for vqueue: %s", err);
+    if (!m)
+        return;
+    q = vq_start(m, fake_now, &clk, NULL, 0);
+    CHECK(q != NULL, "vq_start failed");
+    CHECK(vq_tex_width(q) == 428 && vq_tex_height(q) == 240, "texture size %dx%d", vq_tex_width(q),
+          vq_tex_height(q));
+    while (vq_ready(q) == 0 && !vq_finished(q))
+        wt_sleep_ms(1);
+    fake_set(&clk, 0);
+    while (!vq_finished(q) && polls < 100000) {
+        if (vq_poll(q, fake_now(&clk), &tex)) {
+            CHECK(tex != last_tex, "same texture returned twice in a row");
+            last_tex = tex;
+            changes++;
+        }
+        polls++;
+        if (vq_ready(q) == 3 || polls % 50 == 0)
+            fake_set(&clk, fake_now(&clk) + 0.02); /* 50 Hz display */
+        if (!jumped && fake_now(&clk) > 1.0) {
+            fake_set(&clk, fake_now(&clk) + 1.0);
+            jumped = 1;
+        }
+        wt_sleep_ms(0);
+    }
+    vq_get_stats(q, &st);
+    printf("vqueue: decoded %d, shown %d, dropped %d, skip level %d\n", st.decoded, st.shown,
+           st.late_drops, st.skip_level);
+    CHECK(vq_finished(q), "vqueue did not finish");
+    /* Skip level 2 discards non-reference (B) frames inside the decoder, so fewer than 75
+     * frames come out after the clock jump. */
+    CHECK(st.decoded >= 60 && st.decoded <= 75, "decoded %d frames, expected 60-75", st.decoded);
+    CHECK(st.shown == changes, "stats.shown %d != changes %d", st.shown, changes);
+    CHECK(st.late_drops > 0, "clock jump caused no drops");
+    CHECK(st.shown + st.late_drops == st.decoded, "shown+dropped != decoded");
+    vq_stop(q);
+    media_close(m);
+    wt_thread_join(t);
+    ring_free(fd.r);
+    wt_mutex_free(clk.mu);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 4) {
@@ -207,6 +287,7 @@ int main(int argc, char **argv)
     test_video(argv[1], argv[3]);
     test_audio(argv[2]);
     test_abort(argv[1]);
+    test_vqueue(argv[1]);
     printf(failures ? "%d FAILURE(S)\n" : "all media tests passed\n", failures);
     return failures != 0;
 }

@@ -38,7 +38,7 @@ static mbedtls_ssl_config g_conf;
 int mbedtls_hardware_poll(void *data, unsigned char *output, size_t len, size_t *olen)
 {
     (void)data;
-    if (net_entropy(output, len) != 0)
+    if (plat_entropy(output, len) != 0)
         return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
     *olen = len;
     return 0;
@@ -64,7 +64,7 @@ int http_global_init(char *err, size_t errlen)
 
     if (g_inited)
         return 0;
-    if (net_init() != 0) {
+    if (plat_net_init() != 0) {
         set_err(err, errlen, "network init failed", NULL, 0);
         return -1;
     }
@@ -83,7 +83,7 @@ int http_global_init(char *err, size_t errlen)
         set_err(err, errlen, "seeding RNG failed", NULL, rc);
         return -1;
     }
-    ca = net_ca_bundle_path();
+    ca = plat_ca_bundle_path();
     rc = mbedtls_x509_crt_parse_file(&g_ca, ca);
     if (rc < 0) {
         set_err(err, errlen, "loading CA bundle failed", ca, rc);
@@ -115,13 +115,13 @@ typedef struct {
 
 static int bio_send(void *ctx, const unsigned char *buf, size_t len)
 {
-    int n = net_send(*(int *)ctx, buf, len);
+    int n = plat_send(*(int *)ctx, buf, len);
     return n < 0 ? MBEDTLS_ERR_SSL_INTERNAL_ERROR : n;
 }
 
 static int bio_recv(void *ctx, unsigned char *buf, size_t len)
 {
-    int n = net_recv(*(int *)ctx, buf, len);
+    int n = plat_recv(*(int *)ctx, buf, len);
     return n < 0 ? MBEDTLS_ERR_SSL_TIMEOUT : n;
 }
 
@@ -129,7 +129,7 @@ static int bio_recv(void *ctx, unsigned char *buf, size_t len)
 static int conn_raw_read(conn_t *c, unsigned char *buf, size_t len)
 {
     if (!c->tls)
-        return net_recv(c->sock, buf, len);
+        return plat_recv(c->sock, buf, len);
     for (;;) {
         int n = mbedtls_ssl_read(&c->ssl, buf, len);
         if (n >= 0)
@@ -147,7 +147,7 @@ static int conn_write_all(conn_t *c, const void *data, size_t len)
 {
     const unsigned char *p = data;
     while (len > 0) {
-        int n = c->tls ? mbedtls_ssl_write(&c->ssl, p, len) : net_send(c->sock, p, len);
+        int n = c->tls ? mbedtls_ssl_write(&c->ssl, p, len) : plat_send(c->sock, p, len);
         if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE)
             continue;
         if (n <= 0)
@@ -218,7 +218,7 @@ static void conn_close(conn_t *c)
         mbedtls_ssl_close_notify(&c->ssl);
         mbedtls_ssl_free(&c->ssl);
     }
-    net_close(c->sock);
+    plat_close(c->sock);
     c->sock = -1;
     c->tls = 0;
 }
@@ -399,7 +399,7 @@ static int ci_prefix(const char *s, const char *prefix)
 
 static int open_conn(conn_t *c, const url_t *u, char *err, size_t errlen)
 {
-    const char *proxy = u->https ? net_https_proxy() : NULL;
+    const char *proxy = u->https ? plat_https_proxy() : NULL;
     int rc;
 
     memset(c, 0, sizeof *c);
@@ -414,7 +414,7 @@ static int open_conn(conn_t *c, const url_t *u, char *err, size_t errlen)
             *colon = 0;
             pport = atoi(colon + 1);
         }
-        c->sock = net_tcp_connect(phost, pport, HTTP_TIMEOUT_MS);
+        c->sock = plat_tcp_connect(phost, pport, HTTP_TIMEOUT_MS);
         if (c->sock < 0) {
             set_err(err, errlen, "cannot connect to proxy", proxy, 0);
             return -1;
@@ -424,12 +424,12 @@ static int open_conn(conn_t *c, const url_t *u, char *err, size_t errlen)
         if (conn_write_all(c, line, strlen(line)) != 0 || conn_getline(c, line, sizeof line) < 0 ||
             sscanf(line, "HTTP/%*s %d", &status) != 1 || status != 200) {
             set_err(err, errlen, "proxy refused CONNECT", u->host, 0);
-            net_close(c->sock);
+            plat_close(c->sock);
             return -1;
         }
         while (conn_getline(c, line, sizeof line) > 0) {}
     } else {
-        c->sock = net_tcp_connect(u->host, u->port, HTTP_TIMEOUT_MS);
+        c->sock = plat_tcp_connect(u->host, u->port, HTTP_TIMEOUT_MS);
         if (c->sock < 0) {
             set_err(err, errlen, "cannot connect", u->host, 0);
             return -1;

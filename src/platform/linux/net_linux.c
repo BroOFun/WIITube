@@ -13,9 +13,9 @@
 #define MSG_NOSIGNAL 0 /* macOS: SO_NOSIGPIPE is set on the socket instead */
 #endif
 
-int net_init(void) { return 0; }
+int plat_net_init(void) { return 0; }
 
-int net_tcp_connect(const char *host, int port, int timeout_ms)
+int plat_tcp_connect(const char *host, int port, int timeout_ms)
 {
     struct addrinfo hints, *res = NULL, *ai;
     char portstr[16];
@@ -52,11 +52,11 @@ int net_tcp_connect(const char *host, int port, int timeout_ms)
     return fd;
 }
 
-int net_send(int sock, const void *buf, size_t len) { return (int)send(sock, buf, len, MSG_NOSIGNAL); }
-int net_recv(int sock, void *buf, size_t len) { return (int)recv(sock, buf, len, 0); }
-void net_close(int sock) { if (sock >= 0) close(sock); }
+int plat_send(int sock, const void *buf, size_t len) { return (int)send(sock, buf, len, MSG_NOSIGNAL); }
+int plat_recv(int sock, void *buf, size_t len) { return (int)recv(sock, buf, len, 0); }
+void plat_close(int sock) { if (sock >= 0) close(sock); }
 
-int net_entropy(unsigned char *buf, size_t len)
+int plat_entropy(unsigned char *buf, size_t len)
 {
     FILE *f = fopen("/dev/urandom", "rb");
     size_t n;
@@ -67,7 +67,7 @@ int net_entropy(unsigned char *buf, size_t len)
     return n == len ? 0 : -1;
 }
 
-const char *net_https_proxy(void)
+const char *plat_https_proxy(void)
 {
     static char hostport[256];
     const char *p = getenv("HTTPS_PROXY");
@@ -82,7 +82,7 @@ const char *net_https_proxy(void)
     return hostport;
 }
 
-const char *net_ca_bundle_path(void)
+const char *plat_ca_bundle_path(void)
 {
     static const char *candidates[] = {
         "/etc/ssl/certs/ca-certificates.crt", /* Debian/Ubuntu */
