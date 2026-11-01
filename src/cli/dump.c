@@ -113,7 +113,7 @@ static void player_extras(const char *dir, const char *prefix, const char *json)
 
 int cmd_dump(const char *dir)
 {
-    char body[2048];
+    char body[8192];
     char *j;
     cJSON *r, *tok;
 
@@ -128,8 +128,44 @@ int cmd_dump(const char *dir)
         cJSON_Delete(r);
     }
     free(j);
-    raw(dir, "search_shorts.json", "search", "web", "{\"query\":\"minecraft #shorts\"}");
+    j = raw(dir, "search_shorts.json", "search", "web", "{\"query\":\"minecraft #shorts\"}");
+    if (j && (r = cJSON_Parse(j)) != NULL) {
+        /* YouTube's endless Shorts feed continues from a Short's sequenceParams. */
+        tok = find(r, "sequenceParams");
+        if (cJSON_IsString(tok)) {
+            snprintf(body, sizeof body, "{\"sequenceParams\":\"%s\"}", tok->valuestring);
+            if (strlen(body) < sizeof body - 1) {
+                char *seq = raw(dir, "reel_seq.json", "reel/reel_watch_sequence", "web", body);
+                cJSON *sr = seq ? cJSON_Parse(seq) : NULL;
+                cJSON *ct = find(sr, "continuation");
+                if (cJSON_IsString(ct)) {
+                    snprintf(body, sizeof body, "{\"continuation\":\"%s\"}", ct->valuestring);
+                    raw(dir, "reel_seq_cont.json", "reel/reel_watch_sequence", "web", body);
+                }
+                cJSON_Delete(sr);
+                free(seq);
+            } else {
+                printf("sequenceParams too long (%zu)\n", strlen(tok->valuestring));
+            }
+        }
+        tok = find(r, "videoId");
+        if (cJSON_IsString(tok)) {
+            snprintf(body, sizeof body, "{\"playerRequest\":{\"videoId\":\"%s\"},\"disablePlayerResponse\":true}",
+                     tok->valuestring);
+            raw(dir, "reel_item.json", "reel/reel_item_watch", "web", body);
+        }
+        cJSON_Delete(r);
+    }
+    free(j);
     raw(dir, "home.json", "browse", "web", "{\"browseId\":\"FEwhat_to_watch\"}");
+    /* Other places YouTube recommends videos without an account. */
+    raw(dir, "home_tv.json", "browse", "tv", "{\"browseId\":\"FEwhat_to_watch\"}");
+    raw(dir, "home_tv_samsung.json", "browse", "tv_samsung", "{\"browseId\":\"FEwhat_to_watch\"}");
+    raw(dir, "home_mweb.json", "browse", "mweb", "{\"browseId\":\"FEwhat_to_watch\"}");
+    raw(dir, "trending.json", "browse", "web", "{\"browseId\":\"FEtrending\"}");
+    raw(dir, "explore.json", "browse", "web", "{\"browseId\":\"FEexplore\"}");
+    raw(dir, "next_rick.json", "next", "web", "{\"videoId\":\"dQw4w9WgXcQ\"}");
+    raw(dir, "next_tv_rick.json", "next", "tv", "{\"videoId\":\"dQw4w9WgXcQ\"}");
     raw(dir, "shorts_tab.json", "browse", "web", "{\"browseId\":\"FEshorts\"}");
     j = raw(dir, "player_rick.json", "player", "visionos",
             "{\"videoId\":\"dQw4w9WgXcQ\",\"contentCheckOk\":true,\"racyCheckOk\":true}");

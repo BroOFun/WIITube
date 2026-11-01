@@ -26,6 +26,19 @@
       "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
       "requiresJs": false
     },
+    "tv": {
+      "clientName": "TVHTML5",
+      "clientVersion": "7.20250923.13.00",
+      "clientNameId": 7,
+      "userAgent": "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version",
+      "requiresJs": true
+    },
+    "mweb": {
+      "clientName": "MWEB",
+      "clientVersion": "2.20250925.01.00",
+      "clientNameId": 2,
+      "userAgent": "Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)"
+    },
     "tv_samsung": {
       "clientName": "TVHTML5",
       "clientVersion": "5.20260707",
