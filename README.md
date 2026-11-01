@@ -5,11 +5,23 @@ A standalone YouTube client for the Nintendo Wii (and Wii U vWii) Homebrew Chann
 The Wii talks to YouTube directly with no proxy server, and plays low-resolution H.264
 video (144p–360p), which the Wii's CPU can decode.
 
+## Installing on the Wii / Wii U (vWii)
+1. Download [WIITube-wii.zip](https://github.com/BroOFun/wiitube/raw/ci-build/WIITube-wii.zip)
+   (built automatically from the latest code).
+2. Unzip it onto your SD card so you get `apps/wiitube/boot.dol`.
+3. Put the SD card in the Wii and open WIITube from the Homebrew Channel.
+
+Controls (Wii Remote held upright): D-Pad moves, A selects, B goes back / deletes,
++ searches, 1 changes quality (144p/240p/360p), HOME exits. While a video plays: A pauses,
++/- change the volume, B returns to the results.
+
+If something goes wrong, the app writes `sd:/apps/wiitube/wiitube.log`; please include it
+when reporting the problem.
+
 ## Status
-- Desktop prototype (`wiitube-cli`) of the portable core: HTTPS client, YouTube search,
-  stream lookup and download. The HTTPS layer is tested; the YouTube part still needs
-  testing against the live site.
-- Wii app: not started yet.
+- Desktop prototype (`wiitube-cli`): HTTPS client, YouTube search, stream lookup and
+  download, tested daily against the live site on GitHub Actions.
+- Wii app: first version (v0.1), not yet tested on real hardware.
 
 ## Building the desktop prototype (Linux / WSL / macOS)
 Needs a C compiler, `make`, `curl`, and zlib headers (`zlib1g-dev` on Debian/Ubuntu).
