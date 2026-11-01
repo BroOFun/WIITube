@@ -1,15 +1,17 @@
-/* Linux implementation of net.h, used by the desktop prototype. */
-#define _GNU_SOURCE
+/* Desktop (Linux, macOS, WSL) implementation of net.h, used by the prototype CLI. */
 #include "../../core/net.h"
 
 #include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0 /* macOS: SO_NOSIGPIPE is set on the socket instead */
+#endif
 
 int net_init(void) { return 0; }
 
@@ -35,6 +37,12 @@ int net_tcp_connect(const char *host, int port, int timeout_ms)
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
             setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
         }
+#ifdef SO_NOSIGPIPE
+        {
+            int one = 1;
+            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+        }
+#endif
         if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0)
             break;
         close(fd);
@@ -50,14 +58,13 @@ void net_close(int sock) { if (sock >= 0) close(sock); }
 
 int net_entropy(unsigned char *buf, size_t len)
 {
-    while (len > 0) {
-        ssize_t n = getrandom(buf, len, 0);
-        if (n <= 0)
-            return -1;
-        buf += n;
-        len -= (size_t)n;
-    }
-    return 0;
+    FILE *f = fopen("/dev/urandom", "rb");
+    size_t n;
+    if (!f)
+        return -1;
+    n = fread(buf, 1, len, f);
+    fclose(f);
+    return n == len ? 0 : -1;
 }
 
 const char *net_https_proxy(void)

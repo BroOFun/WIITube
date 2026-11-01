@@ -20,7 +20,11 @@ if [ ! -f "$SRC/mbedtls/include/mbedtls/ssl.h" ]; then
     tarball="$SRC/mbedtls-$MBEDTLS_VER.tar.bz2"
     echo "fetching mbedtls $MBEDTLS_VER"
     fetch "$MBEDTLS_URL" "$tarball"
-    sum=$(sha256sum "$tarball" | cut -d' ' -f1)
+    if command -v sha256sum >/dev/null 2>&1; then
+        sum=$(sha256sum "$tarball" | cut -d' ' -f1)
+    else
+        sum=$(shasum -a 256 "$tarball" | cut -d' ' -f1) # macOS
+    fi
     if [ "$MBEDTLS_SHA256" != "__FILL_ME__" ] && [ "$sum" != "$MBEDTLS_SHA256" ]; then
         echo "mbedtls checksum mismatch: $sum" >&2; exit 1
     fi

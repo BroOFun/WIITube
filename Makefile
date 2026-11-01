@@ -21,8 +21,13 @@ APP_OBJS := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS)) $(BUILD)/rules_builtin.o
 CFLAGS   ?= -O2 -g
 MBED_DEF := -DMBEDTLS_USER_CONFIG_FILE='"wiitube_mbedtls_user.h"'
 INCS     := -Isrc/core -I$(MBED)/include -Ithird_party/cJSON
-APP_FLAGS  := -std=c99 -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation -D_POSIX_C_SOURCE=200809L -DWIITUBE_HAVE_ZLIB
+APP_FLAGS  := -std=c99 -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
+              -Wno-unknown-warning-option -D_POSIX_C_SOURCE=200809L -DWIITUBE_HAVE_ZLIB
 LIBS     := -lz
+
+ifeq ($(shell uname -s),Darwin)
+APP_FLAGS += -D_DARWIN_C_SOURCE
+endif
 
 all: wiitube-cli
 
