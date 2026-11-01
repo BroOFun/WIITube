@@ -435,8 +435,12 @@ static const wt_image *thumb_cb(void *ud, const yt_search_result *r, int vertica
     (void)ud;
     if (vertical && r->thumb_url[0]) {
         char key[24];
+        const wt_image *img;
         snprintf(key, sizeof key, "s:%s", r->video_id);
-        return thumbs_get_url(g_thumbs, key, r->thumb_url, SHORT_THUMB_W);
+        img = thumbs_get_url(g_thumbs, key, r->thumb_url, SHORT_THUMB_W);
+        if (img || !thumbs_failed(g_thumbs, key))
+            return img;
+        /* The vertical picture didn't load: use the normal one (cropped when drawn). */
     }
     return thumbs_get(g_thumbs, r->video_id);
 }

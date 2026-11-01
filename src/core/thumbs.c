@@ -78,10 +78,15 @@ static void *worker(void *arg)
         req.url = url;
         req.headers = "User-Agent: Mozilla/5.0\r\n";
         req.max_buffer = 512 * 1024;
-        if (http_do(&req, &resp, err, sizeof err) == 0 && resp.status == 200 && resp.body)
+        if (http_do(&req, &resp, err, sizeof err) == 0 && resp.status == 200 && resp.body) {
             img = image_from_jpeg(resp.body, resp.body_len, max_w);
-        else
+            if (!img)
+                wlog("thumbs: %s: cannot decode %u bytes of %s (starts %02x %02x %02x %02x)", id,
+                     (unsigned)resp.body_len, resp.content_type, resp.body[0], resp.body_len > 1 ? resp.body[1] : 0,
+                     resp.body_len > 2 ? resp.body[2] : 0, resp.body_len > 3 ? resp.body[3] : 0);
+        } else {
             wlog("thumbs: %s failed (%s, HTTP %d)", id, err, resp.status);
+        }
         http_response_free(&resp);
 
         wt_mutex_lock(t->mu);
@@ -184,6 +189,19 @@ const wt_image *thumbs_get_url(thumbs *t, const char *key, const char *url, int 
     }
     wt_mutex_unlock(t->mu);
     return img;
+}
+
+int thumbs_failed(thumbs *t, const char *key)
+{
+    entry *e;
+    int failed;
+    if (!t || !key)
+        return 0;
+    wt_mutex_lock(t->mu);
+    e = find(t, key);
+    failed = e && e->state == T_FAILED;
+    wt_mutex_unlock(t->mu);
+    return failed;
 }
 
 int thumbs_frame_done(thumbs *t)

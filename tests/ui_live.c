@@ -22,8 +22,12 @@ static const wt_image *get_thumb(void *ud, const yt_search_result *r, int vertic
     (void)ud;
     if (vertical && r->thumb_url[0]) {
         char key[24];
+        const wt_image *img;
         snprintf(key, sizeof key, "s:%s", r->video_id);
-        return thumbs_get_url(g_thumbs, key, r->thumb_url, 120);
+        img = thumbs_get_url(g_thumbs, key, r->thumb_url, 120);
+        if (img || !thumbs_failed(g_thumbs, key))
+            return img;
+        /* The vertical picture didn't load: use the normal one (cropped when drawn). */
     }
     return thumbs_get(g_thumbs, r->video_id);
 }
@@ -40,15 +44,44 @@ static void draw_until_loaded(browse_state *b, int width)
 {
     int tries, before = 0;
     for (tries = 0; tries < 300; tries++) {
-        int opened, reused;
         soft_begin(width);
         browse_draw(b, get_thumb, NULL);
         if (thumbs_frame_done(g_thumbs))
             before = tries;
-        http_stats(&opened, &reused);
-        if (tries - before > 15) /* nothing new for 1.5 s */
+        if (tries - before > 30) /* nothing new for 3 s */
             break;
         wt_sleep_ms(100);
+    }
+}
+
+/* What i.ytimg.com returns for a Short's vertical thumbnail (and alternatives). */
+static void probe_short_thumb(const yt_search_result *r)
+{
+    char urls[4][400];
+    int i;
+    snprintf(urls[0], sizeof urls[0], "%s", r->thumb_url);
+    snprintf(urls[1], sizeof urls[1], "https://i.ytimg.com/vi/%s/oar2.jpg", r->video_id);
+    snprintf(urls[2], sizeof urls[2], "https://i.ytimg.com/vi/%s/frame0.jpg", r->video_id);
+    snprintf(urls[3], sizeof urls[3], "https://i.ytimg.com/vi/%s/hq2.jpg", r->video_id);
+    for (i = 0; i < 4; i++) {
+        http_request req;
+        http_response resp;
+        char err[256] = "";
+        wt_image *img = NULL;
+        memset(&req, 0, sizeof req);
+        req.url = urls[i];
+        req.headers = "User-Agent: Mozilla/5.0\r\n";
+        req.max_buffer = 1 << 20;
+        if (http_do(&req, &resp, err, sizeof err) == 0 && resp.status == 200 && resp.body)
+            img = image_from_jpeg(resp.body, resp.body_len, 0);
+        printf("probe %s\n  -> HTTP %d, %s, %u bytes, starts %02x%02x%02x%02x, %s%s\n", urls[i], resp.status,
+               resp.content_type, (unsigned)resp.body_len, resp.body_len > 0 ? resp.body[0] : 0,
+               resp.body_len > 1 ? resp.body[1] : 0, resp.body_len > 2 ? resp.body[2] : 0,
+               resp.body_len > 3 ? resp.body[3] : 0, img ? "decodes" : "does not decode", err);
+        if (img)
+            printf("  -> %dx%d\n", img->w, img->h);
+        image_free(img);
+        http_response_free(&resp);
     }
 }
 
@@ -148,6 +181,8 @@ int main(int argc, char **argv)
            shorts.nshorts > 0 && shorts.shorts[0].thumb_url[0] ? shorts.nshorts : 0, shorts.continuation ? "yes" : "no");
     if (n <= 0)
         failures++;
+    else
+        probe_short_thumb(&shorts.shorts[0]);
     g_thumbs = thumbs_new("https://i.ytimg.com/vi/%s/mqdefault.jpg", 160, 64, 2);
 
     for (wi = 0; wi < 2; wi++) {
@@ -167,7 +202,8 @@ int main(int argc, char **argv)
         pg->col = 1;
         draw_until_loaded(&b, W);
         save(out, "live-home", W);
-        got = count_loaded(pg->videos.items, pg->videos.n < 8 ? pg->videos.n : 8, 0, &total);
+        got = count_loaded(pg->videos.items, pg->videos.n < 2 * (W >= 800 ? 4 : 3) ? pg->videos.n : 2 * (W >= 800 ? 4 : 3),
+                           0, &total);
         printf("width %d: %d of the first %d video thumbnails loaded\n", W, got, total);
         if (got < total)
             failures++;

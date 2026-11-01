@@ -54,9 +54,11 @@ jobs:
           set -o pipefail
           make build/linux/ui_live
           mkdir -p test-output/ui
-          build/linux/ui_live "wii sports" test-output/ui 2>&1 | tee live.txt
+          status=0
+          build/linux/ui_live "wii sports" test-output/ui 2>&1 | tee live.txt || status=1
           for f in test-output/ui/*.ppm; do ffmpeg -hide_banner -loglevel error -y -i "$f" "${f%.ppm}.png" && rm "$f"; done
           ls -l test-output/ui
+          exit $status
 
       - name: Dump raw YouTube responses (for development)
         continue-on-error: true
