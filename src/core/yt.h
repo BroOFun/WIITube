@@ -60,6 +60,12 @@ int yt_pick_formats(const yt_video *v, int max_height, const yt_format **video, 
 /* Download a format, passing bytes to cb. Uses 10 MiB range requests like yt-dlp.
  * Returns 0 on success. */
 int yt_download(const yt_video *v, const yt_format *f, http_body_cb cb, void *ud, char *err, size_t errlen);
+/* Same, from a stream URL; total is the content length (or -1). */
+int yt_download_url(const char *url, long long total, const char *user_agent, http_body_cb cb, void *ud,
+                    char *err, size_t errlen);
+
+/* Load rules from a JSON string (e.g. downloaded at startup). source is a label for logs. */
+int yt_load_rules_json(const char *json, const char *source, char *err, size_t errlen);
 
 /* Extract an 11-character video ID from an ID or a youtube.com / youtu.be URL. 0 on success. */
 int yt_parse_video_id(const char *in, char out[16]);

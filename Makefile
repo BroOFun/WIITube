@@ -56,7 +56,22 @@ $(BUILD)/rules_builtin.c: rules/youtube.json
 $(BUILD)/rules_builtin.o: $(BUILD)/rules_builtin.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Player pipeline test against the system FFmpeg (needs libavformat-dev etc.).
+# Run with: make test-media  (generates test clips with the ffmpeg CLI)
+FFMPEG_CFLAGS := $(shell pkg-config --cflags libavformat libavcodec libavutil 2>/dev/null)
+FFMPEG_LIBS   := $(shell pkg-config --libs libavformat libavcodec libavutil 2>/dev/null)
+TEST_MEDIA_SRCS := tests/test_media.c src/core/media.c src/core/ring.c src/core/convert.c src/core/log.c \
+                   src/platform/linux/thread_posix.c
+
+$(BUILD)/test_media: $(TEST_MEDIA_SRCS) $(wildcard src/core/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(APP_FLAGS) $(FFMPEG_CFLAGS) -o $@ $(TEST_MEDIA_SRCS) $(FFMPEG_LIBS) -lpthread -lm
+
+test-media: $(BUILD)/test_media
+	sh tests/make_clips.sh $(BUILD)/clips
+	$(BUILD)/test_media $(BUILD)/clips/video.mp4 $(BUILD)/clips/audio.m4a $(BUILD)/clips/ref.rgb
+
 clean:
 	rm -rf build wiitube-cli
 
-.PHONY: all clean
+.PHONY: all clean test-media

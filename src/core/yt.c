@@ -133,6 +133,20 @@ int yt_load_rules(const char *path, char *err, size_t errlen)
     return 0;
 }
 
+int yt_load_rules_json(const char *json, const char *source, char *err, size_t errlen)
+{
+    cJSON *r = cJSON_Parse(json);
+    if (!r || !cJSON_IsObject(jpath(r, "clients")) || !cJSON_IsArray(jpath(r, "player_clients"))) {
+        snprintf(err, errlen, "rules from %s are not valid", source);
+        cJSON_Delete(r);
+        return -1;
+    }
+    cJSON_Delete(g_rules);
+    g_rules = r;
+    snprintf(g_rules_source, sizeof g_rules_source, "%s", source);
+    return 0;
+}
+
 const char *yt_rules_source(void) { return g_rules_source; }
 
 static int ensure_rules(char *err, size_t errlen)
@@ -494,7 +508,11 @@ int yt_pick_formats(const yt_video *v, int max_height, const yt_format **video, 
                 (f->height == (*slot)->height && f->bitrate < (*slot)->bitrate))
                 *slot = f;
         } else if (!f->has_video && f->has_audio && strncmp(f->codecs, "mp4a", 4) == 0) {
-            if (!ba || f->bitrate < ba->bitrate)
+            /* Prefer AAC-LC (mp4a.40.2): HE-AAC (mp4a.40.5) needs the extra SBR decoding
+             * stage, which costs more CPU on the Wii. Then prefer the lower bitrate. */
+            int lc = strcmp(f->codecs, "mp4a.40.2") == 0;
+            int best_lc = ba && strcmp(ba->codecs, "mp4a.40.2") == 0;
+            if (!ba || (lc && !best_lc) || (lc == best_lc && f->bitrate < ba->bitrate))
                 ba = f;
         }
     }
@@ -516,19 +534,26 @@ int yt_pick_formats(const yt_video *v, int max_height, const yt_format **video, 
 
 int yt_download(const yt_video *v, const yt_format *f, http_body_cb cb, void *ud, char *err, size_t errlen)
 {
-    char headers[512];
-    long long start = 0, total = f->content_length;
-
     if (!f->url) {
         snprintf(err, errlen, "format %d has no direct URL", f->itag);
         return -1;
     }
-    snprintf(headers, sizeof headers, "User-Agent: %s\r\n", v->user_agent[0] ? v->user_agent : "Mozilla/5.0");
+    return yt_download_url(f->url, f->content_length, v->user_agent, cb, ud, err, errlen);
+}
+
+int yt_download_url(const char *furl, long long total, const char *user_agent, http_body_cb cb, void *ud,
+                    char *err, size_t errlen)
+{
+    char headers[512];
+    long long start = 0;
+
+    snprintf(headers, sizeof headers, "User-Agent: %s\r\n",
+             user_agent && user_agent[0] ? user_agent : "Mozilla/5.0");
     do {
         http_request req;
         http_response resp;
         char *url;
-        size_t ulen = strlen(f->url) + 64;
+        size_t ulen = strlen(furl) + 64;
         int rc;
 
         url = malloc(ulen);
@@ -538,10 +563,10 @@ int yt_download(const yt_video *v, const yt_format *f, http_body_cb cb, void *ud
             long long end = start + YT_RANGE_CHUNK - 1;
             if (end >= total)
                 end = total - 1;
-            snprintf(url, ulen, "%s&range=%lld-%lld", f->url, start, end);
+            snprintf(url, ulen, "%s&range=%lld-%lld", furl, start, end);
             start = end + 1;
         } else {
-            snprintf(url, ulen, "%s", f->url);
+            snprintf(url, ulen, "%s", furl);
         }
         memset(&req, 0, sizeof req);
         req.url = url;

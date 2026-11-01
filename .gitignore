@@ -5,3 +5,4 @@
 *.m4a
 *.o
 /test-output/
+__pycache__/

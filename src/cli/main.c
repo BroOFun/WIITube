@@ -46,6 +46,7 @@ static int cmd_fetch(const char *url)
     http_response resp;
     dl_state st = { NULL, 0, 0, 0 };
     char err[512];
+    int ok;
 
     memset(&req, 0, sizeof req);
     req.url = url;
@@ -57,8 +58,9 @@ static int cmd_fetch(const char *url)
         return 1;
     }
     printf("HTTP %d, %lld bytes, content-type: %s\n", resp.status, st.bytes, resp.content_type);
+    ok = resp.status >= 200 && resp.status < 400;
     http_response_free(&resp);
-    return resp.status >= 200 && resp.status < 400 ? 0 : 1;
+    return ok ? 0 : 1;
 }
 
 static int cmd_search(int argc, char **argv)
