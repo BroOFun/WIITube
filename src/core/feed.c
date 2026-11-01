@@ -14,28 +14,24 @@ static int seen(const yt_search_result *arr, int n, const char *id)
     return 0;
 }
 
-static void push(yt_search_result **arr, int *n, int *cap, const yt_search_result *r)
+static void push(yt_feed *f, const yt_search_result *r)
 {
-    if (!r->video_id[0] || *n >= YT_FEED_MAX || seen(*arr, *n, r->video_id))
+    if (!r->video_id[0] || f->n >= YT_FEED_MAX || seen(f->items, f->n, r->video_id))
         return;
-    if (*n == *cap) {
-        int nc = *cap ? *cap * 2 : 32;
-        yt_search_result *na = realloc(*arr, sizeof *na * (size_t)nc);
+    if (f->n == f->cap) {
+        int nc = f->cap ? f->cap * 2 : 32;
+        yt_search_result *na = realloc(f->items, sizeof *na * (size_t)nc);
         if (!na)
             return;
-        *arr = na;
-        *cap = nc;
+        f->items = na;
+        f->cap = nc;
     }
-    (*arr)[(*n)++] = *r;
+    f->items[f->n++] = *r;
+    if (r->is_short)
+        f->nshorts++;
 }
 
-void yt_feed_add(yt_feed *f, const yt_search_result *r)
-{
-    if (r->is_short)
-        push(&f->shorts, &f->nshorts, &f->shorts_cap, r);
-    else
-        push(&f->items, &f->n, &f->cap, r);
-}
+void yt_feed_add(yt_feed *f, const yt_search_result *r) { push(f, r); }
 
 int yt_feed_cursor(yt_feed *dst, const yt_feed *src)
 {
@@ -49,26 +45,28 @@ int yt_feed_cursor(yt_feed *dst, const yt_feed *src)
 
 int yt_feed_merge(yt_feed *dst, yt_feed *src)
 {
-    int i, before = dst->n + dst->nshorts;
-    for (i = 0; i < src->n; i++)
-        push(&dst->items, &dst->n, &dst->cap, &src->items[i]);
-    for (i = 0; i < src->nshorts; i++)
-        push(&dst->shorts, &dst->nshorts, &dst->shorts_cap, &src->shorts[i]);
+    int i, before = dst->n;
+    for (i = 0; i < src->n; i++) {
+        yt_search_result r = src->items[i];
+        if (r.shelf > 0)
+            r.shelf += dst->nshelves; /* keep shelf numbers unique in dst */
+        push(dst, &r);
+    }
+    dst->nshelves += src->nshelves;
     free(dst->continuation);
     dst->continuation = src->continuation;
     src->continuation = NULL;
-    if (dst->n >= YT_FEED_MAX || dst->nshorts >= YT_FEED_MAX) {
+    if (dst->n >= YT_FEED_MAX) {
         free(dst->continuation); /* full: stop loading more */
         dst->continuation = NULL;
     }
     yt_feed_free(src);
-    return dst->n + dst->nshorts - before;
+    return dst->n - before;
 }
 
 void yt_feed_free(yt_feed *f)
 {
     free(f->items);
-    free(f->shorts);
     free(f->continuation);
     memset(f, 0, sizeof *f);
 }

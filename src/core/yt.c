@@ -353,7 +353,9 @@ int yt_search(const char *query, yt_search_result *out, int max, char *err, size
 #define FEED_PARAMS_VIDEOS "EgIQAQ=="
 #define FEED_PARAMS_SHORTS "EgIQCQ=="
 
-static void feed_item(yt_feed *f, const cJSON *item, int depth)
+/* One entry of a result list, or a container of entries. shelf > 0 while inside a Shorts
+ * shelf (Shorts found there get that shelf number). */
+static void feed_item(yt_feed *f, const cJSON *item, int depth, int shelf)
 {
     yt_search_result r;
     const cJSON *x, *c;
@@ -377,15 +379,11 @@ static void feed_item(yt_feed *f, const cJSON *item, int depth)
         copy_str(r.video_id, sizeof r.video_id, jstr(x, "onTap.innertubeCommand.reelWatchEndpoint.videoId"));
         jtext(jpath(x, "overlayMetadata.primaryText"), r.title, sizeof r.title);
         jtext(jpath(x, "overlayMetadata.secondaryText"), r.views, sizeof r.views);
-        copy_str(r.thumb_url, sizeof r.thumb_url, jstr(x, "thumbnailViewModel.thumbnailViewModel.image.sources.0.url"));
-        if (!r.thumb_url[0])
-            copy_str(r.thumb_url, sizeof r.thumb_url, jstr(x, "thumbnail.sources.0.url"));
         r.is_short = 1;
     } else if ((x = jpath(item, "reelItemRenderer")) && jstr(x, "videoId")) {
         copy_str(r.video_id, sizeof r.video_id, jstr(x, "videoId"));
         jtext(jpath(x, "headline"), r.title, sizeof r.title);
         jtext(jpath(x, "viewCountText"), r.views, sizeof r.views);
-        copy_str(r.thumb_url, sizeof r.thumb_url, jstr(x, "thumbnail.thumbnails.0.url"));
         r.is_short = 1;
     } else if ((x = jpath(item, "lockupViewModel")) && jstr(x, "contentId")) {
         s = jstr(x, "contentType");
@@ -394,28 +392,33 @@ static void feed_item(yt_feed *f, const cJSON *item, int depth)
         copy_str(r.video_id, sizeof r.video_id, jstr(x, "contentId"));
         jtext(jpath(x, "metadata.lockupMetadataViewModel.title"), r.title, sizeof r.title);
     } else {
-        /* Containers: shelves of videos or Shorts. */
-        static const char *const lists[] = {
-            "shelfRenderer.content.verticalListRenderer.items",
-            "shelfRenderer.content.horizontalListRenderer.items",
-            "gridShelfViewModel.contents",
-            "reelShelfRenderer.items",
-            "richItemRenderer.content",
-            "richSectionRenderer.content.richShelfRenderer.contents",
-            NULL,
+        /* Containers: shelves of videos or Shorts (a Shorts shelf gets a new number). */
+        static const struct {
+            const char *path;
+            int shorts;
+        } lists[] = {
+            { "shelfRenderer.content.verticalListRenderer.items", 0 },
+            { "shelfRenderer.content.horizontalListRenderer.items", 0 },
+            { "gridShelfViewModel.contents", 1 },
+            { "reelShelfRenderer.items", 1 },
+            { "richItemRenderer.content", 0 },
+            { "richSectionRenderer.content.richShelfRenderer.contents", 1 },
+            { NULL, 0 },
         };
         int i;
-        for (i = 0; lists[i]; i++) {
-            const cJSON *l = jpath(item, lists[i]);
+        for (i = 0; lists[i].path; i++) {
+            const cJSON *l = jpath(item, lists[i].path);
+            const int sh = lists[i].shorts && l ? ++f->nshelves : shelf;
             if (cJSON_IsArray(l)) {
                 cJSON_ArrayForEach(c, l)
-                    feed_item(f, c, depth + 1);
+                    feed_item(f, c, depth + 1, sh);
             } else if (cJSON_IsObject(l)) {
-                feed_item(f, l, depth + 1);
+                feed_item(f, l, depth + 1, sh);
             }
         }
         return;
     }
+    r.shelf = r.is_short ? shelf : 0;
     yt_feed_add(f, &r);
 }
 
@@ -432,14 +435,11 @@ static void feed_sections(yt_feed *f, const cJSON *sections)
             continue;
         }
         cJSON_ArrayForEach(item, jpath(sec, "itemSectionRenderer.contents"))
-            feed_item(f, item, 0);
+            feed_item(f, item, 0, 0);
     }
 }
 
-static int feed_count(const yt_feed *f)
-{
-    return f->kind == YT_FEED_SHORTS ? f->nshorts : f->kind == YT_FEED_VIDEOS ? f->n : f->n + f->nshorts;
-}
+static int feed_count(const yt_feed *f) { return f->n; }
 
 int yt_feed_start(yt_feed *f, const char *query, int kind, char *err, size_t errlen)
 {

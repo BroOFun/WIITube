@@ -111,6 +111,75 @@ static void player_extras(const char *dir, const char *prefix, const char *json)
     cJSON_Delete(r);
 }
 
+static void b64(const unsigned char *in, size_t n, char *out)
+{
+    static const char t[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t i, o = 0;
+    for (i = 0; i < n; i += 3) {
+        unsigned v = in[i] << 16 | (i + 1 < n ? in[i + 1] << 8 : 0) | (i + 2 < n ? in[i + 2] : 0);
+        out[o++] = t[v >> 18 & 63];
+        out[o++] = t[v >> 12 & 63];
+        out[o++] = i + 1 < n ? t[v >> 6 & 63] : '=';
+        out[o++] = i + 2 < n ? t[v & 63] : '=';
+    }
+    out[o] = 0;
+}
+
+/* Count distinct "videoId" values in a JSON text. */
+static int count_ids(const char *json)
+{
+    int n = 0;
+    const char *p = json;
+    char seen[200][12];
+    while (json && (p = strstr(p, "\"videoId\":\"")) != NULL && n < 200) {
+        int i, dup = 0;
+        p += 11;
+        for (i = 0; i < n; i++)
+            if (strncmp(seen[i], p, 11) == 0)
+                dup = 1;
+        if (!dup) {
+            memcpy(seen[n], p, 11);
+            seen[n++][11] = 0;
+        }
+    }
+    return n;
+}
+
+/* Experiment: does YouTube build a logged-out home feed after watches are reported
+ * (playback + watchtime pings, as yt-dlp's --mark-watched does)? */
+static void watch_experiment(const char *dir)
+{
+    static const char *ids[] = { "dQw4w9WgXcQ", "9bZkp7q19f0", "kJQP7kiw5Fk", "JGwWNGJdvx8" };
+    char err[512], body[256], url[8192];
+    int i;
+    for (i = 0; i < 4; i++) {
+        cJSON *r, *u;
+        char *j;
+        snprintf(body, sizeof body, "{\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}", ids[i]);
+        j = yt_raw("player", "visionos", body, err, sizeof err);
+        r = j ? cJSON_Parse(j) : NULL;
+        u = find(r, "videostatsPlaybackUrl");
+        u = u ? cJSON_GetObjectItem(u, "baseUrl") : NULL;
+        if (cJSON_IsString(u)) {
+            snprintf(url, sizeof url, "%s&ver=2&cpn=WiiTubeCpn%06d&cmt=0", u->valuestring, i);
+            fetch(dir, "ping_playback.txt", url, NULL);
+        }
+        u = find(r, "videostatsWatchtimeUrl");
+        u = u ? cJSON_GetObjectItem(u, "baseUrl") : NULL;
+        if (cJSON_IsString(u)) {
+            snprintf(url, sizeof url, "%s&ver=2&cpn=WiiTubeCpn%06d&cmt=120&st=0&et=120&state=playing", u->valuestring, i);
+            fetch(dir, "ping_watchtime.txt", url, NULL);
+        }
+        cJSON_Delete(r);
+        free(j);
+    }
+    {
+        char *j = raw(dir, "home_after_watch.json", "browse", "web", "{\"browseId\":\"FEwhat_to_watch\"}");
+        printf("home after watching: %d videos\n", count_ids(j));
+        free(j);
+    }
+}
+
 int cmd_dump(const char *dir)
 {
     char body[8192];
@@ -137,7 +206,8 @@ int cmd_dump(const char *dir)
             if (strlen(body) < sizeof body - 1) {
                 char *seq = raw(dir, "reel_seq.json", "reel/reel_watch_sequence", "web", body);
                 cJSON *sr = seq ? cJSON_Parse(seq) : NULL;
-                cJSON *ct = find(sr, "continuation");
+                cJSON *ct = find(sr, "token");
+                printf("Shorts feed: %d videos\n", count_ids(seq));
                 if (cJSON_IsString(ct)) {
                     snprintf(body, sizeof body, "{\"continuation\":\"%s\"}", ct->valuestring);
                     raw(dir, "reel_seq_cont.json", "reel/reel_watch_sequence", "web", body);
@@ -149,6 +219,20 @@ int cmd_dump(const char *dir)
             }
         }
         tok = find(r, "videoId");
+        if (cJSON_IsString(tok)) {
+            /* Can the Shorts feed start from any Short (sequenceParams = {1: videoId})? */
+            unsigned char pb[13];
+            char p64[32];
+            char *seq;
+            pb[0] = 0x0a;
+            pb[1] = 11;
+            memcpy(pb + 2, tok->valuestring, 11);
+            b64(pb, 13, p64);
+            snprintf(body, sizeof body, "{\"sequenceParams\":\"%s\"}", p64);
+            seq = raw(dir, "reel_seq_built.json", "reel/reel_watch_sequence", "web", body);
+            printf("Shorts feed from a built start (%s): %d videos\n", p64, count_ids(seq));
+            free(seq);
+        }
         if (cJSON_IsString(tok)) {
             snprintf(body, sizeof body, "{\"playerRequest\":{\"videoId\":\"%s\"},\"disablePlayerResponse\":true}",
                      tok->valuestring);
@@ -167,6 +251,7 @@ int cmd_dump(const char *dir)
     raw(dir, "next_rick.json", "next", "web", "{\"videoId\":\"dQw4w9WgXcQ\"}");
     raw(dir, "next_tv_rick.json", "next", "tv", "{\"videoId\":\"dQw4w9WgXcQ\"}");
     raw(dir, "shorts_tab.json", "browse", "web", "{\"browseId\":\"FEshorts\"}");
+    watch_experiment(dir);
     j = raw(dir, "player_rick.json", "player", "visionos",
             "{\"videoId\":\"dQw4w9WgXcQ\",\"contentCheckOk\":true,\"racyCheckOk\":true}");
     if (j)

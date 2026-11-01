@@ -13,25 +13,27 @@ typedef struct {
     char views[48];
     char published[32]; /* "5 months ago" */
     int is_short;
-    char thumb_url[320]; /* explicit thumbnail (Shorts: vertical); empty = i.ytimg.com default */
+    int shelf;          /* > 0: one of the Shorts in shelf number `shelf` of its list */
 } yt_search_result;
 
 /* Endless result lists: the first page plus every page loaded since (YouTube's
- * "continuation" tokens). Videos and Shorts are kept apart. */
+ * "continuation" tokens), in YouTube's order. Shorts shelves are runs of entries with the
+ * same shelf number; Shorts can also appear on their own. */
 enum { YT_FEED_VIDEOS, YT_FEED_SHORTS, YT_FEED_ALL };
 #define YT_FEED_MAX 600 /* stop growing a list beyond this many entries */
 
 typedef struct {
-    yt_search_result *items;  /* regular videos */
+    yt_search_result *items;
     int n, cap;
-    yt_search_result *shorts;
-    int nshorts, shorts_cap;
+    int nshorts;              /* how many entries are Shorts */
+    int nshelves;             /* shelf numbers used so far */
     char *continuation;       /* token for the next page, NULL at the end */
     char query[128];
     int kind;
 } yt_feed;
 
-/* First page of a search (kind selects YouTube's Videos/Shorts filter). Clears f first.
+/* First page of a search: YT_FEED_ALL is YouTube's normal search (videos with Shorts
+ * shelves), the others apply YouTube's Videos / Shorts filter. Clears f first.
  * Returns the number of entries added, or -1 on error. */
 int yt_feed_start(yt_feed *f, const char *query, int kind, char *err, size_t errlen);
 /* Append the next page. Returns entries added (0 when there are no more pages), -1 on error. */
@@ -42,7 +44,7 @@ void yt_feed_free(yt_feed *f);
  * yt_feed_merge(f, dst) appends it to f (skipping repeats) and frees dst. */
 int yt_feed_cursor(yt_feed *dst, const yt_feed *src);
 int yt_feed_merge(yt_feed *dst, yt_feed *src);
-/* Append one entry (to the Shorts list if r->is_short), skipping repeats. */
+/* Append one entry, skipping repeats. */
 void yt_feed_add(yt_feed *f, const yt_search_result *r);
 /* Parse a saved search response into f (tests). */
 int yt_feed_parse_json(yt_feed *f, const char *json, int continuation_page);
