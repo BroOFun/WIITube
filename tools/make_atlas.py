@@ -97,11 +97,21 @@ def make_icons():
         d.line((s * 0.15, s * 0.35, s * 0.5, s * 0.7), fill=255, width=w)
         d.line((s * 0.5, s * 0.7, s * 0.85, s * 0.35), fill=255, width=w)
 
+    def chevron_right(d, s):
+        w = int(s * 0.12)
+        d.line((s * 0.35, s * 0.15, s * 0.7, s * 0.5), fill=255, width=w)
+        d.line((s * 0.7, s * 0.5, s * 0.35, s * 0.85), fill=255, width=w)
+
+    def check(d, s):
+        w = int(s * 0.12)
+        d.line((s * 0.14, s * 0.52, s * 0.4, s * 0.78), fill=255, width=w)
+        d.line((s * 0.4, s * 0.78, s * 0.88, s * 0.24), fill=255, width=w)
+
     white = Image.new("L", (4, 4), 255)
     return [white, icon(64, circle), icon(32, corner_inv), icon(48, play), icon(48, pause),
             icon(32, search), icon(32, volume), icon(32, back), icon(32, cursor_fill),
             icon(32, cursor_edge), icon(64, ring), icon(32, home), icon(32, shorts), icon(32, gear),
-            icon(32, chevron)]
+            icon(32, chevron), icon(32, chevron_right), icon(32, check)]
 
 
 class Packer:

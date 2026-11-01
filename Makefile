@@ -14,7 +14,7 @@ endif
 MBED_SRCS := $(wildcard $(MBED)/library/*.c)
 MBED_OBJS := $(patsubst $(MBED)/library/%.c,$(BUILD)/mbedtls/%.o,$(MBED_SRCS))
 
-APP_SRCS := src/core/http.c src/core/yt.c src/platform/linux/net_linux.c src/cli/main.c src/cli/dump.c \
+APP_SRCS := src/core/http.c src/core/yt.c src/core/feed.c src/core/seekidx.c src/core/captions.c src/platform/linux/net_linux.c src/cli/main.c src/cli/dump.c \
             src/platform/linux/thread_posix.c third_party/cJSON/cJSON.c
 APP_OBJS := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS)) $(BUILD)/rules_builtin.o
 
@@ -61,7 +61,7 @@ $(BUILD)/rules_builtin.o: $(BUILD)/rules_builtin.c
 FFMPEG_CFLAGS := $(shell pkg-config --cflags libavformat libavcodec libavutil 2>/dev/null)
 FFMPEG_LIBS   := $(shell pkg-config --libs libavformat libavcodec libavutil 2>/dev/null)
 TEST_MEDIA_SRCS := tests/test_media.c src/core/media.c src/core/ring.c src/core/convert.c src/core/log.c \
-                   src/core/vqueue.c src/core/yuv_tev.c \
+                   src/core/vqueue.c src/core/yuv_tev.c src/core/seekidx.c \
                    src/platform/linux/thread_posix.c
 
 $(BUILD)/test_media: $(TEST_MEDIA_SRCS) $(wildcard src/core/*.h)
@@ -80,7 +80,7 @@ test-thumbs: $(BUILD)/test_thumbs
 	sh tests/run_thumbs_test.sh $(BUILD)
 
 # Screenshots of the Wii UI rendered in software: make ui-preview (PNGs in build/linux/preview)
-UI_PREVIEW_SRCS := tests/ui_preview.c src/ui/screens.c src/ui/ui_common.c src/ui/atlas_data.c \
+UI_PREVIEW_SRCS := tests/ui_preview.c src/ui/browse.c src/ui/keyboard.c src/ui/player_ui.c src/ui/ui_common.c src/ui/atlas_data.c src/core/feed.c \
                    src/platform/linux/soft_draw.c src/platform/wii/logo_data.c src/core/image.c src/core/convert.c \
                    src/core/yuv_tev.c
 
@@ -96,10 +96,10 @@ ui-preview: $(BUILD)/ui_preview
 
 # Live preview with real search results and thumbnails (needs YouTube access; used in CI):
 #   make build/linux/ui_live && build/linux/ui_live "wii sports" OUTDIR
-UI_LIVE_SRCS := tests/ui_live.c src/ui/screens.c src/ui/ui_common.c src/ui/atlas_data.c \
+UI_LIVE_SRCS := tests/ui_live.c src/ui/browse.c src/ui/keyboard.c src/ui/player_ui.c src/ui/ui_common.c src/ui/atlas_data.c \
                 src/platform/linux/soft_draw.c src/platform/wii/logo_data.c src/core/image.c src/core/convert.c \
                 src/core/yuv_tev.c \
-                src/core/thumbs.c src/core/http.c src/core/yt.c src/core/log.c src/platform/linux/net_linux.c \
+                src/core/thumbs.c src/core/http.c src/core/yt.c src/core/feed.c src/core/seekidx.c src/core/log.c src/platform/linux/net_linux.c \
                 src/platform/linux/thread_posix.c third_party/cJSON/cJSON.c
 
 $(BUILD)/ui_live: $(UI_LIVE_SRCS) $(BUILD)/libmbedtls.a $(BUILD)/rules_builtin.o $(wildcard src/ui/*.h src/core/*.h)
@@ -114,7 +114,7 @@ $(BUILD)/test_yuv_tev: tests/test_yuv_tev.c src/core/yuv_tev.c src/core/yuv_tev.
 test-yuv: $(BUILD)/test_yuv_tev
 	$(BUILD)/test_yuv_tev
 
-TEST_YTDATA_SRCS := tests/test_ytdata.c src/core/yt.c src/core/captions.c src/core/http.c src/core/log.c \
+TEST_YTDATA_SRCS := tests/test_ytdata.c src/core/yt.c src/core/feed.c src/core/seekidx.c src/core/captions.c src/core/http.c src/core/log.c \
                     src/platform/linux/net_linux.c src/platform/linux/thread_posix.c third_party/cJSON/cJSON.c
 
 $(BUILD)/test_ytdata: $(TEST_YTDATA_SRCS) $(BUILD)/libmbedtls.a $(BUILD)/rules_builtin.o $(wildcard src/core/*.h)

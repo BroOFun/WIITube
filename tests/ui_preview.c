@@ -30,12 +30,25 @@ static const struct {
 };
 #define NSAMPLE ((int)(sizeof SAMPLE / sizeof SAMPLE[0]))
 
-static wt_image *thumbs[NSAMPLE];
+static const struct {
+    const char *title, *views;
+} SHORT_SAMPLE[] = {
+    { "Wii Sports bowling but it's 2026", "1.2M views" }, { "Perfect 300 game first try?!", "845K views" },
+    { "Mii Channel music hits different", "3.4M views" }, { "Wii tennis ace compilation", "220K views" },
+    { "Rainbow Road on the Wii in 30 seconds", "9.1M views" }, { "Boxing KO in 4 punches", "77K views" },
+    { "Hole in one on every course", "512K views" }, { "Baseball home run derby", "1.9M views" },
+};
+#define NSHORT ((int)(sizeof SHORT_SAMPLE / sizeof SHORT_SAMPLE[0]))
 
-static const wt_image *get_thumb(void *ud, const char *id)
+static wt_image *thumbs[NSAMPLE], *short_thumbs[NSHORT];
+
+static const wt_image *get_thumb(void *ud, const yt_search_result *r, int vertical)
 {
-    int i = atoi(id + 1);
+    int i = atoi(r->video_id + 1);
     (void)ud;
+    (void)vertical;
+    if (r->video_id[0] == 's')
+        return i >= 0 && i < NSHORT ? short_thumbs[i] : NULL;
     return i >= 0 && i < NSAMPLE ? thumbs[i] : NULL;
 }
 
@@ -69,19 +82,40 @@ static void save(const char *dir, const char *name, int width)
     soft_save_ppm(path);
 }
 
-static void fill_results(browse_state *b)
+/* Sample entries; repeat makes a longer list (ids stay unique). */
+static void fill_page(browse_page *pg, int repeat, int with_shorts)
+{
+    int i, k;
+    yt_search_result r;
+    for (k = 0; k < repeat; k++)
+        for (i = 0; i < NSAMPLE; i++) {
+            memset(&r, 0, sizeof r);
+            snprintf(r.video_id, sizeof r.video_id, "t%d_%d", i, k);
+            snprintf(r.title, sizeof r.title, "%s", SAMPLE[i].title);
+            snprintf(r.channel, sizeof r.channel, "%s", SAMPLE[i].channel);
+            snprintf(r.duration, sizeof r.duration, "%s", SAMPLE[i].duration);
+            snprintf(r.views, sizeof r.views, "%s", SAMPLE[i].views);
+            snprintf(r.published, sizeof r.published, "%s", SAMPLE[i].published);
+            yt_feed_add(&pg->videos, &r);
+        }
+    for (k = 0; with_shorts && k < 2; k++)
+        for (i = 0; i < NSHORT; i++) {
+            memset(&r, 0, sizeof r);
+            snprintf(r.video_id, sizeof r.video_id, "s%d_%d", i, k);
+            snprintf(r.title, sizeof r.title, "%s", SHORT_SAMPLE[i].title);
+            snprintf(r.views, sizeof r.views, "%s", SHORT_SAMPLE[i].views);
+            r.is_short = 1;
+            yt_feed_add(&pg->shorts, &r);
+        }
+    pg->videos.continuation = strdup("more");
+    pg->started = 3;
+}
+
+static void frames(browse_state *b, ui_input *in, int n)
 {
     int i;
-    for (i = 0; i < NSAMPLE; i++) {
-        yt_search_result *r = &b->results[i];
-        snprintf(r->video_id, sizeof r->video_id, "t%d", i);
-        snprintf(r->title, sizeof r->title, "%s", SAMPLE[i].title);
-        snprintf(r->channel, sizeof r->channel, "%s", SAMPLE[i].channel);
-        snprintf(r->duration, sizeof r->duration, "%s", SAMPLE[i].duration);
-        snprintf(r->views, sizeof r->views, "%s", SAMPLE[i].views);
-        snprintf(r->published, sizeof r->published, "%s", SAMPLE[i].published);
-    }
-    b->nresults = NSAMPLE;
+    for (i = 0; i < n; i++)
+        browse_update(b, in);
 }
 
 /* Turn an RGB image into a planar BT.709 YUV frame (what the decoder produces), so the
@@ -128,25 +162,45 @@ static yuv_frame *to_yuv(const wt_image *img)
     return &f;
 }
 
+static void draw_player(player_view *p, const wt_image *frame, const yuv_frame *yuv, int W)
+{
+    float x, y, dw, dh;
+    soft_begin(W);
+    dr_fill(0, 0, W, UI_H, p->is_short ? C_BG : 0x000000ff);
+    player_video_rect(p, frame->w, frame->h, &x, &y, &dw, &dh);
+    dr_video(yuv, x, y, dw, dh);
+    player_draw_overlay(p);
+}
+
 int main(int argc, char **argv)
 {
     static browse_state b;
     keyboard_state k;
     player_view p;
     ui_input in;
-    wt_image *logo, *splash, *frame;
+    wt_image *logo, *splash, *frame, *vframe;
     const yuv_frame *yuv;
+    yuv_frame fyuv, vyuv;
+    const char *dir = argc > 1 ? argv[1] : ".";
     const char *out = argc > 2 ? argv[2] : ".";
     char path[512];
     int widths[2] = { 640, 854 }, wi, i;
 
     for (i = 0; i < NSAMPLE; i++) {
-        snprintf(path, sizeof path, "%s/t%d.jpg", argc > 1 ? argv[1] : ".", i);
+        snprintf(path, sizeof path, "%s/t%d.jpg", dir, i);
         thumbs[i] = load_jpeg(path, 160);
     }
-    snprintf(path, sizeof path, "%s/t0.jpg", argc > 1 ? argv[1] : ".");
+    for (i = 0; i < NSHORT; i++) {
+        snprintf(path, sizeof path, "%s/s%d.jpg", dir, i);
+        short_thumbs[i] = load_jpeg(path, 120); /* shrunk like on the Wii (405 -> 101 wide) */
+    }
+    snprintf(path, sizeof path, "%s/t0.jpg", dir);
     frame = load_jpeg(path, 0); /* stands in for a 320x180 video frame */
-    yuv = to_yuv(frame);
+    fyuv = *to_yuv(frame); /* to_yuv returns a static frame: keep a copy */
+    yuv = &fyuv;
+    snprintf(path, sizeof path, "%s/s4.jpg", dir);
+    vframe = load_jpeg(path, 0); /* a vertical Short's frame */
+    vyuv = *to_yuv(vframe);
     logo = image_from_rgba(logo_small_rgba, logo_small_w, logo_small_h);
     splash = image_from_rgba(logo_splash_rgba, logo_splash_w, logo_splash_h);
 
@@ -154,67 +208,163 @@ int main(int argc, char **argv)
         const int W = widths[wi];
         memset(&in, 0, sizeof in);
 
-        /* Home: topic chip results, second card selected. */
+        /* Home: topic chip results with the Shorts shelf, second card selected. */
         soft_begin(W);
         browse_init(&b, logo);
-        fill_results(&b);
-        b.chip = 1;
+        b.pages[PAGE_HOME].chip = 1;
         b.chip_sel = 1;
-        b.sel = 1;
+        fill_page(&b.pages[PAGE_HOME], 3, 1);
+        b.pages[PAGE_HOME].col = 1;
+        frames(&b, &in, 2);
+        soft_begin(W);
         browse_draw(&b, get_thumb, NULL);
         save(out, "home", W);
 
-        /* Scrolled down to the second row, with the Wii Remote pointer. */
-        b.sel = W >= 800 ? 5 : 4;
-        for (i = 0; i < 30; i++)
-            browse_update(&b, &in);
+        /* Down to the Shorts shelf with the D-pad, then the pointer on the scrollbar. */
+        in.pressed = UI_DOWN;
+        frames(&b, &in, 2);
+        in.pressed = UI_RIGHT;
+        frames(&b, &in, 3);
+        in.pressed = 0;
+        frames(&b, &in, 30);
+        in.pointer = 1;
+        in.pointer_moved = 1;
+        in.px = W - 12;
+        in.py = 200;
+        frames(&b, &in, 1);
         soft_begin(W);
         browse_draw(&b, get_thumb, NULL);
-        ui_cursor(W * 0.62f, 330);
-        save(out, "scrolled", W);
+        ui_cursor(in.px, in.py);
+        save(out, "home-shelf", W);
 
-        /* Search keyboard over the results. */
+        /* Further down: more rows loaded, footer spinner while the next page comes. */
+        memset(&in, 0, sizeof in);
+        in.pressed = UI_DOWN;
+        for (i = 0; i < 6; i++)
+            frames(&b, &in, 1);
+        b.pages[PAGE_HOME].loading_videos = 1;
+        in.pressed = 0;
+        frames(&b, &in, 30);
         soft_begin(W);
-        b.focus = FOCUS_SEARCH;
+        browse_draw(&b, get_thumb, NULL);
+        save(out, "home-more", W);
+
+        /* Shorts page. */
+        browse_set_page(&b, PAGE_SHORTS);
+        fill_page(&b.pages[PAGE_SHORTS], 0, 1);
+        b.pages[PAGE_SHORTS].shorts.continuation = strdup("more");
+        b.pages[PAGE_SHORTS].col = 2;
+        b.focus = FOCUS_GRID;
+        frames(&b, &in, 2);
+        soft_begin(W);
+        browse_draw(&b, get_thumb, NULL);
+        save(out, "shorts", W);
+
+        /* Search results, the rail focused. */
+        browse_set_page(&b, PAGE_SEARCH);
+        snprintf(b.pages[PAGE_SEARCH].query, sizeof b.pages[PAGE_SEARCH].query, "wii sports");
+        fill_page(&b.pages[PAGE_SEARCH], 1, 1);
+        b.focus = FOCUS_RAIL;
+        b.rail_sel = PAGE_SEARCH;
+        frames(&b, &in, 2);
+        soft_begin(W);
+        browse_draw(&b, get_thumb, NULL);
+        save(out, "search", W);
+
+        /* QWERTY keyboard over the results. */
+        soft_begin(W);
         browse_draw(&b, get_thumb, NULL);
         keyboard_open(&k, "mario kart wii");
-        k.row = 1;
-        k.col = 4;
+        k.row = 2;
+        k.col = 3;
         keyboard_draw(&k);
         save(out, "keyboard", W);
 
-        /* Loading a search. */
-        soft_begin(W);
-        b.chip = -1;
-        snprintf(b.query, sizeof b.query, "mario kart wii");
-        b.status = "Searching for \"mario kart wii\"...";
-        b.loading = 1;
+        /* First page loading. */
+        browse_set_page(&b, PAGE_HOME);
+        browse_reset_page(&b, PAGE_HOME);
+        b.pages[PAGE_HOME].loading_videos = 1;
+        b.pages[PAGE_HOME].started = 3;
         b.frame = 12;
+        soft_begin(W);
         browse_draw(&b, get_thumb, NULL);
-        save(out, "searching", W);
-        b.status = NULL;
-        b.loading = 0;
+        save(out, "loading-page", W);
 
-        /* Player with controls showing, and paused. */
-        memset(&p, 0, sizeof p);
+        /* Player: controls with the pointer over the progress bar. */
+        player_view_init(&p);
         snprintf(p.title, sizeof p.title, "%s", SAMPLE[0].title);
         snprintf(p.channel, sizeof p.channel, "%s", SAMPLE[0].channel);
         p.position = 83;
         p.duration = 58 * 60 + 32;
         p.buffered = 0.35f;
         p.volume = 192;
+        p.quality = 480;
+        p.can_seek = 1;
+        p.cc_available = 1;
+        memset(&in, 0, sizeof in);
+        in.pointer = 1;
+        in.pointer_moved = 1;
+        in.px = W * 0.55f;
+        in.py = UI_H - 57;
+        player_update(&p, &in);
+        draw_player(&p, frame, yuv, W);
+        ui_cursor(in.px, in.py);
+        save(out, "player", W);
+
+        /* Paused, captions on, skipping ahead with the D-pad. */
+        memset(&in, 0, sizeof in);
+        p.paused = 1;
+        p.cc_on = 1;
+        snprintf(p.cc_label, sizeof p.cc_label, "English (auto-generated)");
+        snprintf(p.cc_text, sizeof p.cc_text, "so today we're going to play every single\nWii Sports game ever made");
+        in.pressed = UI_RIGHT;
+        player_update(&p, &in);
+        player_update(&p, &in);
+        in.pressed = 0;
+        player_update(&p, &in);
+        draw_player(&p, frame, yuv, W);
+        save(out, "player-paused", W);
+
+        /* Settings menu, then its quality list. */
+        p.nudge_target = -1;
+        p.nudge_timer = 0;
+        p.paused = 0;
+        p.qualities[0] = 144;
+        p.qualities[1] = 240;
+        p.qualities[2] = 360;
+        p.qualities[3] = 480;
+        p.nqualities = 4;
+        p.naudio = 3;
+        snprintf(p.audio_names[0], sizeof p.audio_names[0], "English (original)");
+        snprintf(p.audio_names[1], sizeof p.audio_names[1], "Spanish");
+        snprintf(p.audio_names[2], sizeof p.audio_names[2], "Japanese");
+        in.pressed = UI_2;
+        player_update(&p, &in);
+        in.pressed = 0;
+        draw_player(&p, frame, yuv, W);
+        save(out, "player-menu", W);
+        in.pressed = UI_A;
+        player_update(&p, &in);
+        in.pressed = 0;
+        draw_player(&p, frame, yuv, W);
+        save(out, "player-quality", W);
+
+        /* A Short: vertical video, captions, previous/next. */
+        player_view_init(&p);
+        p.is_short = 1;
+        snprintf(p.title, sizeof p.title, "%s", SHORT_SAMPLE[4].title);
+        snprintf(p.channel, sizeof p.channel, "@wiiclips");
+        p.position = 12;
+        p.duration = 30;
+        p.buffered = 1;
         p.quality = 360;
-        p.overlay_timer = 100;
-        for (i = 0; i < 2; i++) {
-            float x, y, dw, dh;
-            soft_begin(W);
-            dr_fill(0, 0, W, UI_H, 0x000000ff);
-            ui_fit(frame->w, frame->h, &x, &y, &dw, &dh);
-            dr_video(yuv, x, y, dw, dh);
-            p.paused = i;
-            player_draw_overlay(&p);
-            save(out, i ? "player-paused" : "player", W);
-        }
+        p.can_seek = 1;
+        p.has_next = p.has_prev = 1;
+        p.cc_available = 1;
+        p.cc_on = 1;
+        snprintf(p.cc_text, sizeof p.cc_text, "watch this shortcut");
+        draw_player(&p, vframe, &vyuv, W);
+        save(out, "short", W);
 
         /* Loading and error messages. */
         soft_begin(W);

@@ -28,6 +28,10 @@ int media_height(const media *m);
 int media_sample_rate(const media *m);
 double media_duration(const media *m); /* seconds, 0 if unknown */
 
+/* After opening a stream that starts at a seek point: the first timestamp should be about t
+ * seconds; if the file's timestamps are relative instead, they are shifted to match. */
+void media_expect_start(media *m, double t);
+
 /* Trade quality for speed when decoding falls behind (call from the decoding thread):
  * 0 = full quality, 1 = skip H.264 deblocking (slightly blockier),
  * 2 = also skip non-reference frames (fewer frames shown). */

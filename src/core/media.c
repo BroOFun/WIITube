@@ -23,6 +23,9 @@ struct media {
     AVFrame *frame;
     int eof_sent;
     double last_pts;
+    double expect_start; /* < 0: not seeking */
+    double shift;        /* added to timestamps (see media_expect_start) */
+    int got_first;
 };
 
 static void av_log_to_wlog(void *avcl, int level, const char *fmt, va_list vl)
@@ -73,6 +76,7 @@ media *media_open(ring *r, int kind, char *err, size_t errlen)
         return NULL;
     m->r = r;
     m->kind = kind;
+    m->expect_start = -1;
     iobuf = av_malloc(AVIO_BUF_SIZE);
     m->pb = iobuf ? avio_alloc_context(iobuf, AVIO_BUF_SIZE, 0, m, read_cb, NULL, NULL) : NULL;
     m->fmt = avformat_alloc_context();
@@ -197,13 +201,24 @@ static int decode_next(media *m)
     }
 }
 
+void media_expect_start(media *m, double t) { m->expect_start = t; }
+
 static double frame_pts(media *m, double fallback_step)
 {
     int64_t ts = m->frame->best_effort_timestamp;
-    if (ts == AV_NOPTS_VALUE)
+    if (ts == AV_NOPTS_VALUE) {
         m->last_pts += fallback_step;
-    else
-        m->last_pts = (double)ts * av_q2d(m->st->time_base);
+    } else {
+        double t = (double)ts * av_q2d(m->st->time_base);
+        if (!m->got_first && m->expect_start >= 0 && (t < m->expect_start - 2 || t > m->expect_start + 2)) {
+            /* The fragments carry no absolute times (no tfdt), so the demuxer counted
+             * from 0 after the jump: use the seek index time instead. */
+            m->shift = m->expect_start - t;
+            wlog("media: timestamps start at %.2f s after seeking to %.2f s; shifting", t, m->expect_start);
+        }
+        m->last_pts = t + m->shift;
+    }
+    m->got_first = 1;
     return m->last_pts;
 }
 

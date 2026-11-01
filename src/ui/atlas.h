@@ -36,6 +36,8 @@ enum {
     ICON_SHORTS,
     ICON_GEAR,
     ICON_CHEVRON,     /* pointing down (mirror vertically for up) */
+    ICON_CHEVRON_RIGHT, /* mirror horizontally for left */
+    ICON_CHECK,
     ICON_COUNT
 };
 

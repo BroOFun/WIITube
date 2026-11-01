@@ -1,10 +1,9 @@
-/* WiiTube for the Wii / vWii: a YouTube-style browser (search, topic chips, thumbnail grid)
- * and player, all drawn with the GPU (see src/ui). Network work runs on a background job
- * thread so the screen keeps animating. */
+/* WiiTube for the Wii / vWii: a YouTube-style browser (Home with topic chips, Shorts, search;
+ * endless lists) and player, all drawn with the GPU (see src/ui). Network work runs on
+ * background job threads so the screen keeps animating. Playback is in player.c. */
 #include <gccore.h>
 #include <fat.h>
 #include <malloc.h>
-#include <ogc/lwp_watchdog.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,37 +13,34 @@
 #include "../../core/http.h"
 #include "../../core/image.h"
 #include "../../core/log.h"
-#include "../../core/media.h"
 #include "../../core/net.h"
-#include "../../core/ring.h"
-#include "../../core/stream.h"
 #include "../../core/thread.h"
 #include "../../core/thumbs.h"
-#include "../../core/vqueue.h"
 #include "../../core/yt.h"
 #include "../../ui/ui.h"
+#include "app.h"
 #include "audio.h"
 #include "gfx.h"
 #include "threading_alt.h"
 #include "wii.h"
 
 #ifndef APP_VERSION
-#define APP_VERSION "0.4"
+#define APP_VERSION "0.5"
 #endif
-#define APP_DIR "sd:/apps/wiitube"
 #define RULES_URL "https://raw.githubusercontent.com/BroOFun/wiitube/main/rules/youtube.json"
 #define THUMB_URL "https://i.ytimg.com/vi/%s/mqdefault.jpg"
-#define VIDEO_BUFFER (4u << 20)
-#define AUDIO_BUFFER (1u << 20)
+#define SHORT_THUMB_W 120 /* vertical thumbnails (405x720) are shrunk to about this width */
 
 extern const int logo_small_w, logo_small_h, logo_splash_w, logo_splash_h;
 extern const unsigned char logo_small_rgba[], logo_splash_rgba[];
 
-static volatile int g_quit, g_poweroff;
-static int g_sd;
-static wt_image *g_logo, *g_splash;
+volatile int g_quit;
+static volatile int g_poweroff;
+int g_sd;
+wt_image *g_logo, *g_splash;
+unsigned g_frame;
+app_settings g_settings;
 static thumbs *g_thumbs;
-static unsigned g_frame;
 
 /* ---- input ---------------------------------------------------------------------------- */
 
@@ -62,6 +58,8 @@ static unsigned map_wpad(u32 b)
     if (b & WPAD_BUTTON_HOME) k |= UI_HOME;
     if (b & WPAD_BUTTON_1) k |= UI_1;
     if (b & WPAD_BUTTON_2) k |= UI_2;
+    if (b & WPAD_NUNCHUK_BUTTON_C) k |= UI_C;
+    if (b & WPAD_NUNCHUK_BUTTON_Z) k |= UI_Z;
     return k;
 }
 
@@ -81,19 +79,34 @@ static unsigned map_pad(u32 b) /* GameCube controller (original Wii only) */
     return k;
 }
 
-static void read_input(ui_input *in)
+/* One stick axis to -1..1 from its calibration (raw values are 0..255). */
+static float stick_axis(int pos, int min, int center, int max)
+{
+    float v;
+    if (max <= min + 20 || center <= min || center >= max) {
+        min = 30;
+        center = 128;
+        max = 226;
+    }
+    v = pos >= center ? (float)(pos - center) / (max - center) : (float)(pos - center) / (center - min);
+    v = v > 1 ? 1 : v < -1 ? -1 : v;
+    return v > -0.18f && v < 0.18f ? 0 : v; /* dead zone */
+}
+
+void read_input(ui_input *in)
 {
     static unsigned last_dirs, held_frames;
     static float last_x = -1000, last_y = -1000;
-    unsigned held, dirs;
+    unsigned dirs;
+    WPADData *wd;
     ir_t ir;
 
     WPAD_ScanPads();
     PAD_ScanPads();
     memset(in, 0, sizeof *in);
     in->pressed = map_wpad(WPAD_ButtonsDown(0)) | map_pad(PAD_ButtonsDown(0));
-    held = map_wpad(WPAD_ButtonsHeld(0)) | map_pad(PAD_ButtonsHeld(0));
-    dirs = held & UI_DIRS;
+    in->held = map_wpad(WPAD_ButtonsHeld(0)) | map_pad(PAD_ButtonsHeld(0));
+    dirs = in->held & UI_DIRS;
     if (dirs && dirs == last_dirs) {
         if (++held_frames > 24 && held_frames % 5 == 0)
             in->pressed |= dirs; /* auto-repeat */
@@ -101,6 +114,19 @@ static void read_input(ui_input *in)
         held_frames = 0;
     }
     last_dirs = dirs;
+
+    wd = WPAD_Data(0);
+    if (wd && wd->exp.type == WPAD_EXP_NUNCHUK) {
+        const joystick_t *js = &wd->exp.nunchuk.js;
+        in->stick_x = stick_axis(js->pos.x, js->min.x, js->center.x, js->max.x);
+        in->stick_y = -stick_axis(js->pos.y, js->min.y, js->center.y, js->max.y); /* up = negative */
+    } else {
+        int sx = PAD_StickX(0), sy = PAD_StickY(0);
+        if (sx > 18 || sx < -18)
+            in->stick_x = sx / 80.0f > 1 ? 1 : sx / 80.0f < -1 ? -1 : sx / 80.0f;
+        if (sy > 18 || sy < -18)
+            in->stick_y = -sy / 80.0f > 1 ? 1 : -sy / 80.0f < -1 ? -1 : -sy / 80.0f;
+    }
 
     WPAD_IR(0, &ir);
     if (ir.valid) {
@@ -130,7 +156,7 @@ static void on_power(void)
 
 /* ---- diagnostics / settings ------------------------------------------------------------- */
 
-static unsigned free_kb(void)
+unsigned free_kb(void)
 {
     struct mallinfo mi = mallinfo();
     unsigned mem1 = (unsigned)((u32)SYS_GetArenaHi() - (u32)SYS_GetArenaLo());
@@ -138,7 +164,7 @@ static unsigned free_kb(void)
     return ((unsigned)mi.fordblks + mem1 + mem2) / 1024;
 }
 
-static void log_memory(const char *where)
+void log_memory(const char *where)
 {
     struct mallinfo mi = mallinfo();
     wlog("memory (%s): heap used %u KB, available about %u KB", where, (unsigned)mi.uordblks / 1024, free_kb());
@@ -147,24 +173,35 @@ static void log_memory(const char *where)
 #define DEFAULT_QUALITY 480
 #define SETTINGS_VERSION 2 /* v0.4: 480p became the default; older saved choices are reset */
 
-static int load_quality(void)
+static void settings_load(void)
 {
     FILE *f;
-    int q = DEFAULT_QUALITY, version = 0;
+    char line[64];
+    int version = 0;
+    g_settings.quality = DEFAULT_QUALITY;
+    g_settings.captions = 0;
     if (!g_sd || !(f = fopen(APP_DIR "/settings.txt", "r")))
-        return q;
-    if (fscanf(f, "quality=%d\nversion=%d", &q, &version) < 1 || version < SETTINGS_VERSION ||
-        (q != 144 && q != 240 && q != 360 && q != 480))
-        q = DEFAULT_QUALITY;
+        return;
+    while (fgets(line, sizeof line, f)) {
+        int v;
+        if (sscanf(line, "quality=%d", &v) == 1)
+            g_settings.quality = v;
+        else if (sscanf(line, "version=%d", &v) == 1)
+            version = v;
+        else if (sscanf(line, "captions=%d", &v) == 1)
+            g_settings.captions = v != 0;
+    }
     fclose(f);
-    return q;
+    if (version < SETTINGS_VERSION || (g_settings.quality != 144 && g_settings.quality != 240 &&
+                                       g_settings.quality != 360 && g_settings.quality != 480))
+        g_settings.quality = DEFAULT_QUALITY;
 }
 
-static void save_quality(int q)
+void settings_save(void)
 {
     FILE *f;
     if (g_sd && (f = fopen(APP_DIR "/settings.txt", "w"))) {
-        fprintf(f, "quality=%d\nversion=%d\n", q, SETTINGS_VERSION);
+        fprintf(f, "quality=%d\nversion=%d\ncaptions=%d\n", g_settings.quality, SETTINGS_VERSION, g_settings.captions);
         fclose(f);
     }
 }
@@ -173,22 +210,16 @@ static void flush_cache(void *p, size_t len) { DCFlushRange(p, (u32)len); }
 
 /* ---- background jobs -------------------------------------------------------------------- */
 
-typedef struct {
-    wt_thread *thread;
-    volatile int done;
-} job;
-
-static int job_start(job *j, void *(*fn)(void *), void *arg)
+int job_start(job *j, void *(*fn)(void *), void *arg)
 {
     j->done = 0;
     j->thread = wt_thread_start(fn, arg, 256 * 1024, 0);
     return j->thread ? 0 : -1;
 }
 
-static int job_running(job *j) { return j->thread && !j->done; }
+int job_running(job *j) { return j->thread && !j->done; }
 
-/* Join a finished job. Returns 1 if it had finished and was collected. */
-static int job_collect(job *j)
+int job_collect(job *j)
 {
     if (!j->thread || !j->done)
         return 0;
@@ -197,15 +228,14 @@ static int job_collect(job *j)
     return 1;
 }
 
-static void draw_message(const char *title, const char *detail, int busy)
+void draw_message(const char *title, const char *detail, int busy)
 {
     gfx_frame_begin();
     ui_message(g_splash, title, detail, busy, g_frame++);
     gfx_frame_end();
 }
 
-/* Show an error until A (or B/HOME) is pressed. */
-static void error_screen(const char *title, const char *detail)
+void error_screen(const char *title, const char *detail)
 {
     ui_input in;
     wlog("error: %s: %s", title, detail ? detail : "");
@@ -268,330 +298,147 @@ static void *startup_main(void *arg)
     return NULL;
 }
 
-/* ---- search -------------------------------------------------------------------------------- */
+/* ---- page loading -----------------------------------------------------------------------
+ * Two job slots: one for regular videos, one for Shorts. A job fills its own yt_feed with
+ * one page; the main thread merges it into the page's list, so the UI never sees a list
+ * that is being changed. */
+
+enum { FEED_VIDEOS, FEED_SHORTS };
 
 typedef struct {
     job j;
-    char query[64];
-    yt_search_result results[UI_MAX_RESULTS];
-    int n;
-    char err[512];
-} search_job;
+    int page, gen, first;
+    yt_feed result;
+    int rc;
+    char err[256];
+} feed_job;
 
-static void *search_main(void *arg)
+static feed_job g_feed_jobs[2];
+static browse_state g_browse;
+
+static void *feed_main(void *arg)
 {
-    search_job *s = arg;
-    s->n = yt_search(s->query, s->results, UI_MAX_RESULTS, s->err, sizeof s->err);
-    s->j.done = 1;
+    feed_job *fj = arg;
+    if (fj->first)
+        fj->rc = yt_feed_start(&fj->result, fj->result.query, fj->result.kind, fj->err, sizeof fj->err);
+    else
+        fj->rc = yt_feed_more(&fj->result, fj->err, sizeof fj->err);
+    fj->j.done = 1;
     return NULL;
 }
 
-static search_job g_search;
-static char g_pending_query[64];
-static int g_has_pending;
-
-static void start_search(browse_state *b, const char *query)
+static const char *page_query(const browse_page *pg, int page)
 {
-    if (job_running(&g_search.j)) {
-        snprintf(g_pending_query, sizeof g_pending_query, "%s", query);
-        g_has_pending = 1;
+    return page == PAGE_SEARCH ? pg->query : ui_chips[pg->chip >= 0 && pg->chip < UI_NUM_CHIPS ? pg->chip : 0];
+}
+
+static void feed_start(browse_state *b, int page, int which)
+{
+    browse_page *pg = &b->pages[page];
+    feed_job *fj = &g_feed_jobs[which];
+    yt_feed *list = which == FEED_VIDEOS ? &pg->videos : &pg->shorts;
+    const int first = !(pg->started & (which == FEED_VIDEOS ? 1 : 2));
+
+    if (job_running(&fj->j) || fj->j.thread)
+        return;
+    memset(&fj->result, 0, sizeof fj->result);
+    if (first) {
+        list->kind = which == FEED_VIDEOS ? YT_FEED_VIDEOS : YT_FEED_SHORTS;
+        snprintf(list->query, sizeof list->query, "%s", page_query(pg, page));
+        fj->result.kind = list->kind;
+        snprintf(fj->result.query, sizeof fj->result.query, "%s", list->query);
+    } else if (!list->continuation || yt_feed_cursor(&fj->result, list) != 0) {
         return;
     }
-    job_collect(&g_search.j);
-    memset(g_search.results, 0, sizeof g_search.results);
-    snprintf(g_search.query, sizeof g_search.query, "%s", query);
-    g_search.err[0] = 0;
-    b->status = "Loading...";
-    b->loading = 1;
-    if (job_start(&g_search.j, search_main, &g_search) != 0) {
-        b->status = "Could not start the search.";
-        b->loading = 0;
-    }
-}
-
-static void poll_search(browse_state *b)
-{
-    static char msg[600];
-    if (!job_collect(&g_search.j))
-        return;
-    if (g_has_pending) {
-        g_has_pending = 0;
-        start_search(b, g_pending_query);
+    fj->page = page;
+    fj->gen = pg->gen;
+    fj->first = first;
+    fj->err[0] = 0;
+    if (job_start(&fj->j, feed_main, fj) != 0) {
+        yt_feed_free(&fj->result);
         return;
     }
-    b->loading = 0;
-    if (g_search.n < 0) {
-        snprintf(msg, sizeof msg, "Search failed: %s", g_search.err);
-        b->status = msg;
-        b->nresults = 0;
+    pg->started |= which == FEED_VIDEOS ? 1 : 2;
+    if (which == FEED_VIDEOS)
+        pg->loading_videos = 1;
+    else
+        pg->loading_shorts = 1;
+}
+
+static void feed_collect(browse_state *b, int which)
+{
+    feed_job *fj = &g_feed_jobs[which];
+    browse_page *pg;
+    if (!job_collect(&fj->j))
+        return;
+    pg = &b->pages[fj->page];
+    if (fj->gen != pg->gen) { /* the page was reset meanwhile */
+        yt_feed_free(&fj->result);
         return;
     }
-    memcpy(b->results, g_search.results, sizeof b->results);
-    b->nresults = g_search.n;
-    b->status = g_search.n == 0 ? "No results." : NULL;
-    b->sel = 0;
-    b->scroll = 0;
-    wlog("search \"%s\": %d results", g_search.query, g_search.n);
-}
-
-/* ---- playback ------------------------------------------------------------------------------ */
-
-typedef struct {
-    job j;
-    char video_id[16];
-    int quality;
-    yt_video v;
-    int have_v;
-    const yt_format *vf, *af;
-    yt_stream *vs, *as;
-    media *mv, *ma;
-    char err_title[64], err[512];
-    int ok;
-} open_job;
-
-/* Rough memory needed to play at this size: download buffers, the decode-ahead frame
- * textures, up to 16 decoder frames (H.264 reference frames + output), and some slack. */
-static unsigned needed_kb(int w, int h)
-{
-    unsigned frame = (unsigned)w * h * 3 / 2;
-    return (VIDEO_BUFFER + AUDIO_BUFFER) / 1024 + VQ_SLOTS * frame / 1024 + 16u * frame / 1024 + 4096;
-}
-
-static void *open_main(void *arg)
-{
-    open_job *o = arg;
-    char serr[256] = "";
-
-    if (yt_get_video(o->video_id, &o->v, o->err, sizeof o->err) != 0) {
-        snprintf(o->err_title, sizeof o->err_title, "Could not load this video.");
-        goto done;
-    }
-    o->have_v = 1;
-    if (yt_pick_formats(&o->v, o->quality, &o->vf, &o->af) != 0) {
-        snprintf(o->err_title, sizeof o->err_title, "Can't play this video.");
-        snprintf(o->err, sizeof o->err, "No H.264 stream at %dp or lower. Try another quality (1 button).",
-                 o->quality);
-        goto done;
-    }
-    if (!o->af)
-        o->af = o->vf; /* muxed stream: read the same URL twice (video + audio) */
-    if (needed_kb(o->vf->width, o->vf->height) > free_kb()) {
-        snprintf(o->err_title, sizeof o->err_title, "Not enough memory.");
-        snprintf(o->err, sizeof o->err, "%dp needs about %u KB but only %u KB are free. Try a lower quality.",
-                 o->vf->height, needed_kb(o->vf->width, o->vf->height), free_kb());
-        goto done;
-    }
-    wlog("play %s via %s: video itag %d %dx%d %s, audio itag %d %s", o->v.video_id, o->v.client, o->vf->itag,
-         o->vf->width, o->vf->height, o->vf->codecs, o->af->itag, o->af->codecs);
-    log_memory("before playback");
-    o->vs = yt_stream_start(&o->v, o->vf, VIDEO_BUFFER);
-    o->as = yt_stream_start(&o->v, o->af, AUDIO_BUFFER);
-    if (!o->vs || !o->as) {
-        snprintf(o->err_title, sizeof o->err_title, "Could not start the download.");
-        snprintf(o->err, sizeof o->err, "Not enough memory or system resources (details in wiitube.log).");
-        goto done;
-    }
-    o->mv = media_open(yt_stream_ring(o->vs), MEDIA_VIDEO, o->err, sizeof o->err);
-    if (!o->mv) {
-        yt_stream_error(o->vs, serr, sizeof serr);
-        if (serr[0])
-            snprintf(o->err, sizeof o->err, "%s", serr);
-        snprintf(o->err_title, sizeof o->err_title, "Could not start the video.");
-        goto done;
-    }
-    o->ma = media_open(yt_stream_ring(o->as), MEDIA_AUDIO, serr, sizeof serr);
-    if (!o->ma)
-        wlog("no audio: %s", serr); /* play silently rather than not at all */
-    o->ok = 1;
-done:
-    o->j.done = 1;
-    return NULL;
-}
-
-static void close_playback(open_job *o)
-{
-    if (o->vs)
-        ring_abort(yt_stream_ring(o->vs));
-    if (o->as)
-        ring_abort(yt_stream_ring(o->as));
-    media_close(o->mv);
-    media_close(o->ma);
-    yt_stream_stop(o->vs, 3000);
-    yt_stream_stop(o->as, 3000);
-    if (o->have_v)
-        yt_video_free(&o->v);
-    o->mv = o->ma = NULL;
-    o->vs = o->as = NULL;
-    o->have_v = 0;
-}
-
-typedef struct {
-    int use_audio, started;
-    u64 start;
-} play_clock;
-
-static double clock_now(void *ud)
-{
-    play_clock *c = ud;
-    if (c->use_audio)
-        return audio_clock();
-    if (!c->started)
-        return -1;
-    return (double)ticks_to_microsecs(gettime() - c->start) / 1e6;
-}
-
-static void flush_texture(void *tex, size_t len) { DCFlushRange(tex, (u32)len); }
-
-static int16_t g_pcm[8192 * 2];
-
-/* Decode audio into the output buffer while that won't block long on the network. */
-static int feed_audio(media *ma, ring *ar)
-{
-    while (audio_space() >= 8192 && (ring_available(ar) >= 32768 || ring_done(ar))) {
-        int frames = 0;
-        double pts = 0;
-        if (media_next_audio(ma, g_pcm, 8192, &frames, &pts) <= 0)
-            return 0;
-        audio_push(g_pcm, frames, pts);
-    }
-    return 1;
-}
-
-static void play_video(const yt_search_result *r, int quality)
-{
-    static open_job o;
-    vqueue *q = NULL;
-    play_clock clk = { 0, 0, 0 };
-    player_view pv;
-    ui_input in;
-    const yuv_frame *frame = NULL;
-    int audio_live, starting = 1, idle = 0, cancelled = 0;
-    char loading[300];
-    vq_stats st;
-
-    memset(&o, 0, sizeof o);
-    snprintf(o.video_id, sizeof o.video_id, "%s", r->video_id);
-    o.quality = quality;
-    memset(&pv, 0, sizeof pv);
-    snprintf(pv.title, sizeof pv.title, "%s", r->title);
-    snprintf(pv.channel, sizeof pv.channel, "%s", r->channel);
-    pv.volume = 255;
-    pv.quality = quality;
-    pv.overlay_timer = 240;
-
-    /* 1. Look up the streams and open the decoders in the background. */
-    if (job_start(&o.j, open_main, &o) != 0) {
-        error_screen("Could not start playback.", NULL);
+    if (which == FEED_VIDEOS)
+        pg->loading_videos = 0;
+    else
+        pg->loading_shorts = 0;
+    if (fj->rc < 0) {
+        wlog("load %s for \"%s\" failed: %s", which == FEED_VIDEOS ? "videos" : "Shorts", fj->result.query, fj->err);
+        /* Only an empty page shows the error; a failed Shorts shelf just stays away. */
+        if (which == FEED_VIDEOS || fj->page == PAGE_SHORTS) {
+            pg->failed = 1;
+            snprintf(pg->status, sizeof pg->status, "Couldn't load videos: %s", fj->err);
+        }
+        yt_feed_free(&fj->result);
         return;
     }
     {
-        char t[256];
-        ui_ascii(t, sizeof t, r->title);
-        snprintf(loading, sizeof loading, "Loading \"%s\"", t);
-    }
-    while (!o.j.done) {
-        read_input(&in);
-        if (in.pressed & (UI_B | UI_HOME))
-            cancelled = 1;
-        draw_message(cancelled ? "Cancelling..." : loading, NULL, 1);
-    }
-    job_collect(&o.j);
-    if (!o.ok || cancelled || g_quit) {
-        if (!o.ok && !cancelled)
-            error_screen(o.err_title[0] ? o.err_title : "Could not play this video.", o.err);
-        close_playback(&o);
-        log_memory("after failed playback");
-        return;
-    }
-    pv.duration = o.v.length_seconds;
-    pv.quality = o.vf->height;
-
-    /* 2. Start decoding; play once a picture and some sound are ready. */
-    audio_reset(o.ma ? media_sample_rate(o.ma) : 44100);
-    clk.use_audio = o.ma != NULL;
-    audio_live = o.ma != NULL;
-    q = vq_start(o.mv, clock_now, &clk, flush_texture, 0);
-    if (!q) {
-        log_memory("video setup failed");
-        error_screen("Could not start the video decoder.", "Not enough memory (details in wiitube.log).");
-        close_playback(&o);
-        return;
-    }
-
-    for (;;) {
-        int act;
-        double now;
-        const yuv_frame *next;
-
-        read_input(&in);
-        act = player_update(&pv, &in);
-        if (g_quit || act == ACT_PLAYER_BACK)
-            break;
-        if (act == ACT_PLAYER_PAUSE && !starting) {
-            pv.paused = !pv.paused;
-            audio_pause(pv.paused);
+        yt_feed *list = which == FEED_VIDEOS ? &pg->videos : &pg->shorts;
+        int added = yt_feed_merge(list, &fj->result);
+        wlog("loaded %d %s for \"%s\" (now %d)%s", added, which == FEED_VIDEOS ? "videos" : "Shorts", list->query,
+             which == FEED_VIDEOS ? list->n : list->nshorts, list->continuation ? "" : ", end of list");
+        if (which == FEED_VIDEOS && list->nshorts > 0) {
+            /* Shorts found among the videos join the Shorts shelf. */
+            int i;
+            for (i = 0; i < list->nshorts; i++)
+                yt_feed_add(&pg->shorts, &list->shorts[i]);
+            list->nshorts = 0;
         }
-        if (act == ACT_PLAYER_VOLUME)
-            audio_set_volume(pv.volume);
-
-        if (audio_live && !pv.paused)
-            audio_live = feed_audio(o.ma, yt_stream_ring(o.as));
-        if (starting && (vq_ready(q) > 0 || vq_finished(q)) && (!audio_live || audio_buffered() >= 22050)) {
-            starting = 0;
-            if (clk.use_audio)
-                audio_play();
-            clk.start = gettime();
-            clk.started = 1;
-        }
-
-        now = clock_now(&clk);
-        if (!starting && !pv.paused && vq_poll(q, now, &next)) {
-            frame = next;
-            idle = 0;
-        } else if (!pv.paused) {
-            idle++;
-        }
-        pv.position = now > 0 ? now : 0;
-        pv.buffered = o.vf->content_length > 0 ? (float)yt_stream_received(o.vs) / o.vf->content_length : 0;
-        pv.buffering = starting || (idle > 45 && vq_ready(q) == 0 && !vq_finished(q));
-
-        gfx_frame_begin();
-        dr_fill(0, 0, ui_width(), UI_H, 0x000000ffu);
-        if (frame) {
-            float x, y, w, h;
-            ui_fit(frame->w, frame->h, &x, &y, &w, &h);
-            dr_video(frame, x, y, w, h); /* the GPU converts YUV to RGB */
-        }
-        player_draw_overlay(&pv);
-        if (in.pointer && pv.overlay_timer > 0)
-            ui_cursor(in.px, in.py);
-        gfx_frame_end();
-
-        if (!starting && !pv.paused && vq_finished(q) && (!clk.use_audio || (!audio_live && audio_buffered() == 0)))
-            break;
+        if (fj->first && which == FEED_VIDEOS && list->n == 0 && pg->shorts.nshorts == 0)
+            snprintf(pg->status, sizeof pg->status, "No results.");
     }
+}
 
-    audio_stop();
-    if (o.vs)
-        ring_abort(yt_stream_ring(o.vs)); /* unblock the decoder if it waits for data */
-    if (o.as)
-        ring_abort(yt_stream_ring(o.as));
-    vq_get_stats(q, &st);
-    wlog("played %s at %dp: decoded %d, shown %d, dropped %d, audio underruns %d, skip level %d, "
-         "avg decode %.1f ms + prepare %.1f ms per frame",
-         o.video_id, o.vf->height, st.decoded, st.shown, st.late_drops, audio_underruns(), st.skip_level,
-         st.decode_ms, st.convert_ms);
-    vq_stop(q);
-    close_playback(&o);
-    log_memory("after playback");
+/* Each frame: merge finished pages and start what the current page wants. */
+static void feeds_tick(browse_state *b)
+{
+    feed_collect(b, FEED_VIDEOS);
+    feed_collect(b, FEED_SHORTS);
+    if (b->want_videos)
+        feed_start(b, b->page, FEED_VIDEOS);
+    if (b->want_shorts)
+        feed_start(b, b->page, FEED_SHORTS);
+}
+
+/* During playback (player.c): keep loading, and fetch more Shorts when asked. */
+static void play_tick(void *ud, int need_more)
+{
+    browse_state *b = ud;
+    b->want_videos = 0;
+    b->want_shorts = need_more;
+    feeds_tick(b);
+    b->want_shorts = 0;
 }
 
 /* ---- main ---------------------------------------------------------------------------------- */
 
-static const wt_image *thumb_cb(void *ud, const char *id)
+static const wt_image *thumb_cb(void *ud, const yt_search_result *r, int vertical)
 {
     (void)ud;
-    return thumbs_get(g_thumbs, id);
+    if (vertical && r->thumb_url[0]) {
+        char key[24];
+        snprintf(key, sizeof key, "s:%s", r->video_id);
+        return thumbs_get_url(g_thumbs, key, r->thumb_url, SHORT_THUMB_W);
+    }
+    return thumbs_get(g_thumbs, r->video_id);
 }
 
 static void quit(void)
@@ -605,11 +452,27 @@ static void quit(void)
     exit(0);
 }
 
+static void play(browse_state *b)
+{
+    play_request req;
+    browse_page *pg = &b->pages[b->page];
+    int last;
+    memset(&req, 0, sizeof req);
+    req.feed = b->play_feed;
+    req.index = b->play_index;
+    req.is_short = b->play_short;
+    req.tick = play_tick;
+    req.tick_ud = b;
+    last = player_run(&req);
+    if (req.is_short && req.feed == &pg->shorts)
+        browse_select_short(b, last);
+}
+
 int main(int argc, char **argv)
 {
     static startup_job su;
-    static browse_state b;
     static keyboard_state kb;
+    browse_state *b = &g_browse;
     int kb_open = 0;
     ui_input in;
     (void)argc;
@@ -639,6 +502,7 @@ int main(int argc, char **argv)
     wii_mbedtls_threading_init();
     g_logo = image_from_rgba(logo_small_rgba, logo_small_w, logo_small_h);
     g_splash = image_from_rgba(logo_splash_rgba, logo_splash_w, logo_splash_h);
+    settings_load();
     log_memory("startup");
 
     /* Connect while showing the splash screen. */
@@ -652,55 +516,56 @@ int main(int argc, char **argv)
         quit();
     }
 
-    g_thumbs = thumbs_new(THUMB_URL, 160, 48, 2);
-    browse_init(&b, g_logo);
-    b.quality = load_quality();
-    b.chip = 0;
-    start_search(&b, ui_chips[0]);
+    g_thumbs = thumbs_new(THUMB_URL, 160, 64, 2);
+    browse_init(b, g_logo);
+    b->quality = g_settings.quality;
 
     while (!g_quit) {
         int act;
         read_input(&in);
-        poll_search(&b);
 
         if (kb_open) {
             act = keyboard_update(&kb, &in);
             if (act == ACT_KB_SEARCH) {
                 kb_open = 0;
-                b.chip = -1;
-                snprintf(b.query, sizeof b.query, "%s", kb.text);
-                b.focus = FOCUS_GRID;
-                start_search(&b, kb.text);
+                snprintf(b->pages[PAGE_SEARCH].query, sizeof b->pages[PAGE_SEARCH].query, "%s", kb.text);
+                browse_reset_page(b, PAGE_SEARCH);
+                browse_set_page(b, PAGE_SEARCH);
+                b->focus = FOCUS_GRID;
+                wlog("search \"%s\"", kb.text);
             } else if (act == ACT_KB_CANCEL) {
                 kb_open = 0;
             }
+            b->want_videos = b->want_shorts = 0;
         } else {
-            act = browse_update(&b, &in);
+            act = browse_update(b, &in);
             switch (act) {
             case ACT_QUIT:
                 quit();
                 break;
             case ACT_OPEN_KEYBOARD:
-                keyboard_open(&kb, b.chip < 0 ? b.query : "");
+                keyboard_open(&kb, b->pages[PAGE_SEARCH].query);
                 kb_open = 1;
                 break;
             case ACT_CHIP:
-                b.query[0] = 0;
-                start_search(&b, ui_chips[b.chip]);
+                browse_reset_page(b, b->page);
                 break;
             case ACT_QUALITY:
-                save_quality(b.quality);
+                g_settings.quality = b->quality;
+                settings_save();
                 break;
             case ACT_PLAY:
-                play_video(&b.results[b.sel], b.quality);
+                play(b);
+                b->quality = g_settings.quality; /* may have been changed in the player */
                 break;
             default:
                 break;
             }
         }
+        feeds_tick(b);
 
         gfx_frame_begin();
-        browse_draw(&b, thumb_cb, NULL);
+        browse_draw(b, thumb_cb, NULL);
         if (kb_open)
             keyboard_draw(&kb);
         if (in.pointer)

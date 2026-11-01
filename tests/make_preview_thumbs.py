@@ -37,4 +37,30 @@ for name, c0, c1, line1, line2 in ITEMS:
         d.text(((320 - w) / 2 + 3, y + 3), text, font=font, fill=(0, 0, 0))
         d.text(((320 - w) / 2, y), text, font=font, fill=(255, 255, 255))
     im.save(os.path.join(OUT, name + ".jpg"), quality=85)
+# Vertical 405x720 "Shorts" thumbnails (YouTube serves oar2.jpg in this shape).
+SHORTS = [
+    ("s0", (200, 30, 60), (255, 140, 60), "WII", "SPORTS"),
+    ("s1", (20, 60, 160), (60, 200, 255), "BOWLING", "300"),
+    ("s2", (30, 120, 60), (180, 240, 90), "MII", "CHANNEL"),
+    ("s3", (90, 20, 140), (230, 100, 255), "TENNIS", "ACE"),
+    ("s4", (160, 90, 10), (255, 210, 80), "MARIO", "KART"),
+    ("s5", (20, 20, 20), (120, 120, 120), "BOXING", "KO"),
+    ("s6", (10, 100, 120), (80, 230, 200), "GOLF", "HOLE IN 1"),
+    ("s7", (140, 20, 20), (255, 90, 90), "BASEBALL", "HOME RUN"),
+]
+for name, c0, c1, line1, line2 in SHORTS:
+    im = Image.new("RGB", (405, 720))
+    px = im.load()
+    for y in range(720):
+        for x in range(405):
+            t = (x / 405 * 0.3 + y / 720 * 0.7)
+            px[x, y] = tuple(int(a + (b - a) * t) for a, b in zip(c0, c1))
+    d = ImageDraw.Draw(im)
+    big = ImageFont.truetype(BOLD, 64)
+    small = ImageFont.truetype(BOLD, 40)
+    for text, font, y in ((line1, big, 260), (line2, small, 350)):
+        w = d.textlength(text, font=font)
+        d.text(((405 - w) / 2 + 4, y + 4), text, font=font, fill=(0, 0, 0))
+        d.text(((405 - w) / 2, y), text, font=font, fill=(255, 255, 255))
+    im.save(os.path.join(OUT, name + ".jpg"), quality=85)
 print("thumbnails in", OUT)

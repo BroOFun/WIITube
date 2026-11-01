@@ -10,7 +10,9 @@
 enum { T_EMPTY, T_QUEUED, T_LOADING, T_READY, T_FAILED };
 
 typedef struct {
-    char id[16];
+    char id[24];      /* cache key */
+    char url[320];    /* explicit URL, "" = url_fmt with the key */
+    int max_w;
     int state;
     unsigned last_used; /* frame number */
     wt_image *img;
@@ -43,7 +45,8 @@ static void *worker(void *arg)
     thumbs *t = arg;
     for (;;) {
         entry *job = NULL;
-        char id[16], url[192], err[256];
+        char id[24], url[320], err[256];
+        int max_w;
         http_request req;
         http_response resp;
         wt_image *img = NULL;
@@ -64,15 +67,19 @@ static void *worker(void *arg)
         }
         job->state = T_LOADING;
         memcpy(id, job->id, sizeof id);
+        if (job->url[0])
+            memcpy(url, job->url, sizeof url);
+        else
+            snprintf(url, sizeof url, t->url_fmt, id);
+        max_w = job->max_w;
         wt_mutex_unlock(t->mu);
 
-        snprintf(url, sizeof url, t->url_fmt, id);
         memset(&req, 0, sizeof req);
         req.url = url;
         req.headers = "User-Agent: Mozilla/5.0\r\n";
         req.max_buffer = 512 * 1024;
         if (http_do(&req, &resp, err, sizeof err) == 0 && resp.status == 200 && resp.body)
-            img = image_from_jpeg(resp.body, resp.body_len, t->max_w);
+            img = image_from_jpeg(resp.body, resp.body_len, max_w);
         else
             wlog("thumbs: %s failed (%s, HTTP %d)", id, err, resp.status);
         http_response_free(&resp);
@@ -135,12 +142,17 @@ void thumbs_free(thumbs *t)
 
 const wt_image *thumbs_get(thumbs *t, const char *video_id)
 {
+    return thumbs_get_url(t, video_id, NULL, 0);
+}
+
+const wt_image *thumbs_get_url(thumbs *t, const char *key, const char *url, int max_w)
+{
     entry *e;
     const wt_image *img = NULL;
-    if (!t || !video_id || !video_id[0])
+    if (!t || !key || !key[0])
         return NULL;
     wt_mutex_lock(t->mu);
-    e = find(t, video_id);
+    e = find(t, key);
     if (!e) {
         /* Use an empty slot, else evict the least recently used finished thumbnail that
          * was not drawn in the last two frames. */
@@ -158,7 +170,9 @@ const wt_image *thumbs_get(thumbs *t, const char *video_id)
         if (e) {
             image_free(e->img);
             memset(e, 0, sizeof *e);
-            snprintf(e->id, sizeof e->id, "%s", video_id);
+            snprintf(e->id, sizeof e->id, "%s", key);
+            snprintf(e->url, sizeof e->url, "%s", url ? url : "");
+            e->max_w = max_w > 0 ? max_w : t->max_w;
             e->state = T_QUEUED;
             wt_cond_broadcast(t->cv);
         }

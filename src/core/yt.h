@@ -37,6 +37,13 @@ int yt_feed_start(yt_feed *f, const char *query, int kind, char *err, size_t err
 /* Append the next page. Returns entries added (0 when there are no more pages), -1 on error. */
 int yt_feed_more(yt_feed *f, char *err, size_t errlen);
 void yt_feed_free(yt_feed *f);
+/* For loading the next page in another thread: dst becomes an empty feed with src's query,
+ * kind and continuation token. yt_feed_more(dst) then fetches only the new page, and
+ * yt_feed_merge(f, dst) appends it to f (skipping repeats) and frees dst. */
+int yt_feed_cursor(yt_feed *dst, const yt_feed *src);
+int yt_feed_merge(yt_feed *dst, yt_feed *src);
+/* Append one entry (to the Shorts list if r->is_short), skipping repeats. */
+void yt_feed_add(yt_feed *f, const yt_search_result *r);
 /* Parse a saved search response into f (tests). */
 int yt_feed_parse_json(yt_feed *f, const char *json, int continuation_page);
 

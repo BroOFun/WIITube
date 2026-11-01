@@ -17,10 +17,15 @@ extern const unsigned char logo_small_rgba[], logo_splash_rgba[];
 
 static thumbs *g_thumbs;
 
-static const wt_image *get_thumb(void *ud, const char *id)
+static const wt_image *get_thumb(void *ud, const yt_search_result *r, int vertical)
 {
     (void)ud;
-    return thumbs_get(g_thumbs, id);
+    if (vertical && r->thumb_url[0]) {
+        char key[24];
+        snprintf(key, sizeof key, "s:%s", r->video_id);
+        return thumbs_get_url(g_thumbs, key, r->thumb_url, 120);
+    }
+    return thumbs_get(g_thumbs, r->video_id);
 }
 
 static void save(const char *dir, const char *name, int width)
@@ -30,15 +35,32 @@ static void save(const char *dir, const char *name, int width)
     soft_save_ppm(path);
 }
 
-/* Visible cards whose thumbnails are loaded (and how many are visible). */
-static int count_loaded(browse_state *b, int *visible)
+/* Keep "drawing frames" until the thumbnails asked for have arrived (max ~30 s). */
+static void draw_until_loaded(browse_state *b, int width)
 {
-    int i, n = 0, cols = ui_width() >= 800 ? 4 : 3, rows = 2;
-    *visible = b->nresults < cols * rows ? b->nresults : cols * rows;
-    for (i = 0; i < *visible; i++)
-        if (thumbs_get(g_thumbs, b->results[i].video_id))
-            n++;
-    return n;
+    int tries, before = 0;
+    for (tries = 0; tries < 300; tries++) {
+        int opened, reused;
+        soft_begin(width);
+        browse_draw(b, get_thumb, NULL);
+        if (thumbs_frame_done(g_thumbs))
+            before = tries;
+        http_stats(&opened, &reused);
+        if (tries - before > 15) /* nothing new for 1.5 s */
+            break;
+        wt_sleep_ms(100);
+    }
+}
+
+/* How many visible entries have thumbnails (videos or Shorts). */
+static int count_loaded(const yt_search_result *r, int n, int vertical, int *total)
+{
+    int i, got = 0;
+    *total = n;
+    for (i = 0; i < n; i++)
+        if (get_thumb(NULL, &r[i], vertical))
+            got++;
+    return got;
 }
 
 /* Turn an RGB image into a planar BT.709 YUV frame (what the decoder produces), so the
@@ -88,12 +110,12 @@ static yuv_frame *to_yuv(const wt_image *img)
 int main(int argc, char **argv)
 {
     static browse_state b;
-    static yt_search_result res[UI_MAX_RESULTS];
     const char *query = argc > 1 ? argv[1] : "wii sports";
     const char *out = argc > 2 ? argv[2] : ".";
     char err[512];
-    int widths[2] = { 640, 854 }, wi, n, failures = 0;
+    int widths[2] = { 640, 854 }, wi, failures = 0, n, got, total;
     wt_image *logo, *splash, *frame = NULL;
+    yt_feed videos, shorts, more;
 
     if (yt_load_rules(argc > 3 ? argv[3] : "rules/youtube.json", err, sizeof err) != 0 ||
         http_global_init(err, sizeof err) != 0) {
@@ -102,38 +124,70 @@ int main(int argc, char **argv)
     }
     logo = image_from_rgba(logo_small_rgba, logo_small_w, logo_small_h);
     splash = image_from_rgba(logo_splash_rgba, logo_splash_w, logo_splash_h);
-    n = yt_search(query, res, UI_MAX_RESULTS, err, sizeof err);
+    memset(&videos, 0, sizeof videos);
+    memset(&shorts, 0, sizeof shorts);
+    n = yt_feed_start(&videos, query, YT_FEED_VIDEOS, err, sizeof err);
     if (n <= 0) {
         fprintf(stderr, "search failed: %s\n", n < 0 ? err : "no results");
         return 1;
     }
-    printf("search \"%s\": %d results\n", query, n);
-    g_thumbs = thumbs_new("https://i.ytimg.com/vi/%s/mqdefault.jpg", 160, 48, 2);
+    printf("videos \"%s\": %d videos, %d Shorts, more: %s\n", query, videos.n, videos.nshorts,
+           videos.continuation ? "yes" : "no");
+    /* Second page, loaded the way the Wii app does it (cursor + merge). */
+    if (yt_feed_cursor(&more, &videos) == 0 && yt_feed_more(&more, err, sizeof err) >= 0) {
+        int added = yt_feed_merge(&videos, &more);
+        printf("next page: +%d (now %d videos), more: %s\n", added, videos.n, videos.continuation ? "yes" : "no");
+        if (added <= 0)
+            failures++;
+    } else {
+        printf("next page failed: %s\n", err);
+        failures++;
+    }
+    n = yt_feed_start(&shorts, query, YT_FEED_SHORTS, err, sizeof err);
+    printf("Shorts \"%s\": %d Shorts (%d with a vertical thumbnail URL), more: %s\n", query, shorts.nshorts,
+           shorts.nshorts > 0 && shorts.shorts[0].thumb_url[0] ? shorts.nshorts : 0, shorts.continuation ? "yes" : "no");
+    if (n <= 0)
+        failures++;
+    g_thumbs = thumbs_new("https://i.ytimg.com/vi/%s/mqdefault.jpg", 160, 64, 2);
 
     for (wi = 0; wi < 2; wi++) {
-        int tries, loaded = 0, visible = 0;
-        soft_begin(widths[wi]);
+        const int W = widths[wi];
+        browse_page *pg;
+        int i;
+        soft_begin(W);
         browse_init(&b, logo);
-        memcpy(b.results, res, sizeof res);
-        b.nresults = n;
-        b.chip = -1;
-        snprintf(b.query, sizeof b.query, "%s", query);
-        b.sel = 1;
-        /* Keep "drawing frames" until the visible thumbnails have arrived (max ~30 s). */
-        for (tries = 0; tries < 300; tries++) {
-            soft_begin(widths[wi]);
-            browse_draw(&b, get_thumb, NULL);
-            thumbs_frame_done(g_thumbs);
-            loaded = count_loaded(&b, &visible);
-            if (loaded == visible)
-                break;
-            wt_sleep_ms(100);
+        browse_set_page(&b, PAGE_SEARCH);
+        pg = &b.pages[PAGE_SEARCH];
+        snprintf(pg->query, sizeof pg->query, "%s", query);
+        for (i = 0; i < videos.n; i++)
+            yt_feed_add(&pg->videos, &videos.items[i]);
+        for (i = 0; i < shorts.nshorts; i++)
+            yt_feed_add(&pg->shorts, &shorts.shorts[i]);
+        pg->started = 3;
+        pg->col = 1;
+        draw_until_loaded(&b, W);
+        save(out, "live-home", W);
+        got = count_loaded(pg->videos.items, pg->videos.n < 8 ? pg->videos.n : 8, 0, &total);
+        printf("width %d: %d of the first %d video thumbnails loaded\n", W, got, total);
+        if (got < total)
+            failures++;
+
+        /* Scroll down to the Shorts shelf. */
+        {
+            ui_input in;
+            memset(&in, 0, sizeof in);
+            in.pressed = UI_DOWN;
+            browse_update(&b, &in);
+            browse_update(&b, &in);
+            in.pressed = 0;
+            for (i = 0; i < 30; i++)
+                browse_update(&b, &in);
         }
-        soft_begin(widths[wi]);
-        browse_draw(&b, get_thumb, NULL);
-        save(out, "live-home", widths[wi]);
-        printf("width %d: %d of %d visible thumbnails loaded\n", widths[wi], loaded, visible);
-        if (loaded < visible)
+        draw_until_loaded(&b, W);
+        save(out, "live-shorts", W);
+        got = count_loaded(pg->shorts.shorts, pg->shorts.nshorts < 5 ? pg->shorts.nshorts : 5, 1, &total);
+        printf("width %d: %d of the first %d Shorts thumbnails loaded\n", W, got, total);
+        if (got < total)
             failures++;
     }
 
@@ -143,7 +197,7 @@ int main(int argc, char **argv)
         http_request req;
         http_response resp;
         memset(&req, 0, sizeof req);
-        snprintf(url, sizeof url, "https://i.ytimg.com/vi/%s/mqdefault.jpg", b.results[0].video_id);
+        snprintf(url, sizeof url, "https://i.ytimg.com/vi/%s/mqdefault.jpg", videos.items[0].video_id);
         req.url = url;
         req.headers = "User-Agent: Mozilla/5.0\r\n";
         if (http_do(&req, &resp, err, sizeof err) == 0 && resp.status == 200)
@@ -153,15 +207,16 @@ int main(int argc, char **argv)
     if (frame) {
         player_view p;
         float x, y, w, h;
-        memset(&p, 0, sizeof p);
-        snprintf(p.title, sizeof p.title, "%s", b.results[0].title);
-        snprintf(p.channel, sizeof p.channel, "%s", b.results[0].channel);
+        player_view_init(&p);
+        snprintf(p.title, sizeof p.title, "%s", videos.items[0].title);
+        snprintf(p.channel, sizeof p.channel, "%s", videos.items[0].channel);
         p.position = 83;
         p.duration = 600;
         p.buffered = 0.4f;
         p.volume = 192;
-        p.quality = 360;
-        p.overlay_timer = 100;
+        p.quality = 480;
+        p.can_seek = 1;
+        p.cc_available = 1;
         soft_begin(854);
         dr_fill(0, 0, 854, UI_H, 0x000000ff);
         ui_fit(frame->w, frame->h, &x, &y, &w, &h);

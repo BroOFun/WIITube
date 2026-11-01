@@ -138,21 +138,31 @@ void dr_atlas(float x, float y, float w, float h, float ax, float ay, float aw, 
 
 void dr_image(const wt_image *img, float x, float y, float w, float h, uint8_t alpha)
 {
+    dr_image_part(img, x, y, w, h, 0, 0, 1, 1, alpha);
+}
+
+void dr_image_part(const wt_image *img, float x, float y, float w, float h, float u0, float v0, float u1, float v1,
+                   uint8_t alpha)
+{
     int x0, y0, x1, y1, px, py;
     if (!img || w <= 0 || h <= 0 || !span(x, y, w, h, &x0, &y0, &x1, &y1))
         return;
     for (py = y0; py < y1; py++) {
-        float v = (py + 0.5f - y) / h * img->h - 0.5f;
+        float v = (v0 + (py + 0.5f - y) / h * (v1 - v0)) * img->h - 0.5f;
         int iv = v < 0 ? 0 : (int)v;
         float fv = v < 0 ? 0 : v - iv;
         int iv1 = iv + 1 < img->h ? iv + 1 : img->h - 1;
+        if (iv >= img->h)
+            iv = iv1 = img->h - 1;
         for (px = x0; px < x1; px++) {
-            float u = (px + 0.5f - x) / w * img->w - 0.5f;
+            float u = (u0 + (px + 0.5f - x) / w * (u1 - u0)) * img->w - 0.5f;
             int iu = u < 0 ? 0 : (int)u, iu1;
             float fu = u < 0 ? 0 : u - iu, out[4];
             uint8_t p00[4], p10[4], p01[4], p11[4];
             int k;
             iu1 = iu + 1 < img->w ? iu + 1 : img->w - 1;
+            if (iu >= img->w)
+                iu = iu1 = img->w - 1;
             image_pixel_rgba(img, iu, iv, p00);
             image_pixel_rgba(img, iu1, iv, p10);
             image_pixel_rgba(img, iu, iv1, p01);

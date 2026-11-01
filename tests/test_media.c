@@ -14,6 +14,7 @@
 #include "../src/core/ring.h"
 #include "../src/core/thread.h"
 #include "../src/core/vqueue.h"
+#include "../src/core/yt.h"
 #include "../src/core/yuv_tev.h"
 
 static int failures;
@@ -302,6 +303,96 @@ static void test_vqueue(const char *path, const unsigned char *ref_rgb)
     wt_mutex_free(clk.mu);
 }
 
+/* ---- seeking: header + data from a sidx subsegment, as yt_stream_start_at sends it ---- */
+
+typedef struct {
+    const unsigned char *a, *b;
+    size_t alen, blen;
+    ring *r;
+} mem_feeder;
+
+static void *mem_feed_main(void *arg)
+{
+    mem_feeder *fd = arg;
+    int rc = ring_write(fd->r, fd->a, fd->alen);
+    if (rc == 0)
+        rc = ring_write(fd->r, fd->b, fd->blen);
+    ring_finish(fd->r, rc != 0);
+    return NULL;
+}
+
+static unsigned long long be32(const unsigned char *p) { return (unsigned long long)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
+
+static void test_seek(const char *path, int kind)
+{
+    size_t len = 0, pos = 0, sidx_at = 0, sidx_len = 0, init_end = 0;
+    unsigned char *file = read_file(path, &len);
+    yt_index idx;
+    int k, rc;
+
+    CHECK(file != NULL, "cannot read %s", path);
+    if (!file)
+        return;
+    while (pos + 8 <= len) { /* top-level boxes: ftyp moov sidx moof mdat ... */
+        size_t size = (size_t)be32(file + pos);
+        if (size < 8)
+            break;
+        if (memcmp(file + pos + 4, "moov", 4) == 0)
+            init_end = pos + size - 1;
+        if (memcmp(file + pos + 4, "sidx", 4) == 0 && !sidx_at) {
+            sidx_at = pos;
+            sidx_len = size;
+        }
+        pos += size;
+    }
+    CHECK(sidx_at && init_end, "%s: no sidx/moov", path);
+    if (!sidx_at || yt_parse_sidx(file + sidx_at, sidx_len, (long long)(sidx_at + sidx_len), &idx) != 0) {
+        CHECK(0, "%s: sidx not parsed", path);
+        free(file);
+        return;
+    }
+    CHECK(idx.n >= 3, "%s: only %d subsegments", path, idx.n);
+    k = yt_index_find(&idx, idx.start[idx.n - 1] * 0.6);
+    {
+        mem_feeder fd = { file, file + idx.offset[k], init_end + 1, len - (size_t)idx.offset[k], ring_new(64 * 1024) };
+        wt_thread *t = wt_thread_start(mem_feed_main, &fd, 0, 1);
+        char err[256];
+        media *m = media_open(fd.r, kind, err, sizeof err);
+        double first = -1;
+        CHECK(m != NULL, "media_open after seek: %s", err);
+        if (m) {
+            media_expect_start(m, idx.start[k]);
+            if (kind == MEDIA_VIDEO) {
+                media_frame fr;
+                int n = 0;
+                while ((rc = media_next_video(m, &fr)) == 1) {
+                    if (n++ == 0)
+                        first = fr.pts;
+                }
+                printf("seek video: subsegment %d of %d starts %.3f s; first frame %.3f s, %d frames to the end\n", k,
+                       idx.n, idx.start[k], first, n);
+                CHECK(n > 0 && n < 75, "unexpected frame count %d after seek", n);
+            } else {
+                static int16_t pcm[4096 * 2];
+                int frames;
+                double pts;
+                if (media_next_audio(m, pcm, 4096, &frames, &pts) == 1)
+                    first = pts;
+                printf("seek audio: subsegment %d of %d starts %.3f s; first samples at %.3f s\n", k, idx.n,
+                       idx.start[k], first);
+            }
+            CHECK(first >= idx.start[k] - 0.1 && first <= idx.start[k] + 0.25, "first timestamp %.3f, expected %.3f",
+                  first, idx.start[k]);
+            media_close(m);
+        }
+        ring_abort(fd.r);
+        wt_thread_join(t);
+        ring_free(fd.r);
+    }
+    yt_index_free(&idx);
+    free(file);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 4) {
@@ -311,6 +402,8 @@ int main(int argc, char **argv)
     test_video(argv[1], argv[3]);
     test_audio(argv[2]);
     test_abort(argv[1]);
+    test_seek(argv[1], MEDIA_VIDEO);
+    test_seek(argv[2], MEDIA_AUDIO);
     {
         size_t ref_len = 0;
         unsigned char *ref = read_file(argv[3], &ref_len);

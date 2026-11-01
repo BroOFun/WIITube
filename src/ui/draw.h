@@ -23,6 +23,9 @@ void dr_vgradient(float x, float y, float w, float h, rgba_t top, rgba_t bottom)
 void dr_atlas(float x, float y, float w, float h, float ax, float ay, float aw, float ah, rgba_t c);
 /* Image (thumbnail, video frame, logo). Only the alpha of tint is used. */
 void dr_image(const wt_image *img, float x, float y, float w, float h, uint8_t alpha);
+/* Part of an image: u0..u1, v0..v1 are fractions of its width and height (cropping). */
+void dr_image_part(const wt_image *img, float x, float y, float w, float h, float u0, float v0, float u1, float v1,
+                   uint8_t alpha);
 /* Video frame: planar YUV textures, converted to RGB by the GPU (see core/yuv_tev.h). */
 void dr_video(const yuv_frame *f, float x, float y, float w, float h);
 /* Restrict drawing to a rectangle (w <= 0 turns clipping off). */

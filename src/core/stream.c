@@ -10,6 +10,7 @@ struct yt_stream {
     char *url;
     char user_agent[256];
     long long total;
+    long long init_end, offset; /* seeking: bytes [0, init_end] then [offset, total) */
     ring *r;
     wt_thread *thread;
     wt_mutex *mu;
@@ -48,7 +49,13 @@ static void *stream_main(void *arg)
 {
     yt_stream *s = arg;
     char err[256] = "";
-    int rc = yt_download_url(s->url, s->total, s->user_agent, on_data, s, err, sizeof err);
+    int rc;
+    if (s->offset > 0)
+        rc = yt_download_span(s->url, 0, s->init_end + 1, s->user_agent, on_data, s, err, sizeof err);
+    else
+        rc = 0;
+    if (rc == 0)
+        rc = yt_download_span(s->url, s->offset, s->total, s->user_agent, on_data, s, err, sizeof err);
 
     wt_mutex_lock(s->mu);
     if (rc != 0)
@@ -62,6 +69,11 @@ static void *stream_main(void *arg)
 
 yt_stream *yt_stream_start(const yt_video *v, const yt_format *f, size_t buffer_size)
 {
+    return yt_stream_start_at(v, f, buffer_size, 0);
+}
+
+yt_stream *yt_stream_start_at(const yt_video *v, const yt_format *f, size_t buffer_size, long long offset)
+{
     yt_stream *s;
     if (!f->url)
         return NULL;
@@ -70,6 +82,10 @@ yt_stream *yt_stream_start(const yt_video *v, const yt_format *f, size_t buffer_
         return NULL;
     s->url = strdup(f->url);
     s->total = f->content_length;
+    if (offset > 0 && f->init_end > 0 && offset > f->init_end && (f->content_length < 0 || offset < f->content_length)) {
+        s->init_end = f->init_end;
+        s->offset = offset;
+    }
     snprintf(s->user_agent, sizeof s->user_agent, "%s", v->user_agent);
     s->r = ring_new(buffer_size);
     s->mu = wt_mutex_new();
@@ -102,6 +118,14 @@ long long yt_stream_received(yt_stream *s)
     wt_mutex_lock(s->mu);
     n = s->received;
     wt_mutex_unlock(s->mu);
+    return n;
+}
+
+long long yt_stream_position(yt_stream *s)
+{
+    long long n = yt_stream_received(s);
+    if (s->offset > 0)
+        n = n > s->init_end + 1 ? s->offset + n - (s->init_end + 1) : s->offset;
     return n;
 }
 

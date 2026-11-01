@@ -1,6 +1,7 @@
 /* Text and shape helpers built on the drawing primitives. */
 #include "ui.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /* ---- text ---------------------------------------------------------------------- */
@@ -217,4 +218,35 @@ void ui_cursor(float x, float y)
 {
     ui_icon(ICON_CURSOR_EDGE, x - 4, y - 3, 36, 36, 0x000000ffu);
     ui_icon(ICON_CURSOR_FILL, x - 2, y - 1, 32, 32, 0xffffffffu);
+}
+
+/* ---- messages ------------------------------------------------------------------------------ */
+
+void ui_message(const wt_image *logo, const char *title, const char *detail, int busy, unsigned frame)
+{
+    const float W = (float)ui_width();
+    char t[256], d[512];
+    dr_fill(0, 0, W, UI_H, C_BG);
+    if (logo) {
+        float h = 72, w = logo->w * h / logo->h;
+        dr_image(logo, (W - w) / 2, 110, w, h, 255);
+    }
+    ui_ascii(t, sizeof t, title ? title : "");
+    if (busy) {
+        ui_spinner(W / 2, 262, 18, frame);
+        ui_text(FONT_BODY, (W - ui_text_width(FONT_BODY, t)) / 2, 300, t, C_TEXT2, W - 40);
+        return;
+    }
+    ui_text(FONT_HUGE, (W - ui_text_width(FONT_HUGE, t)) / 2, 230, t, C_TEXT, W - 40);
+    if (detail) {
+        const float maxw = W - 120;
+        ui_ascii(d, sizeof d, detail);
+        ui_text_wrap_center(FONT_BODY, W / 2, 276, d, C_TEXT2, maxw, 4);
+    }
+    {
+        const char *hint = "Press A to continue";
+        float hw = ui_text_width(FONT_TITLE, hint) + 32;
+        ui_round_rect((W - hw) / 2, 400, hw, 34, 17, C_CHIP);
+        ui_text(FONT_TITLE, (W - hw) / 2 + 16, 408, hint, C_TEXT, 0);
+    }
 }

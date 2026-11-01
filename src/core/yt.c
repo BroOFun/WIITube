@@ -353,30 +353,6 @@ int yt_search(const char *query, yt_search_result *out, int max, char *err, size
 #define FEED_PARAMS_VIDEOS "EgIQAQ=="
 #define FEED_PARAMS_SHORTS "EgIQCQ=="
 
-static int seen(const yt_search_result *arr, int n, const char *id)
-{
-    int i, from = n > 300 ? n - 300 : 0; /* pages can repeat entries; check recent ones */
-    for (i = from; i < n; i++)
-        if (strcmp(arr[i].video_id, id) == 0)
-            return 1;
-    return 0;
-}
-
-static void push(yt_search_result **arr, int *n, int *cap, const yt_search_result *r)
-{
-    if (!r->video_id[0] || *n >= YT_FEED_MAX || seen(*arr, *n, r->video_id))
-        return;
-    if (*n == *cap) {
-        int nc = *cap ? *cap * 2 : 32;
-        yt_search_result *na = realloc(*arr, sizeof *na * (size_t)nc);
-        if (!na)
-            return;
-        *arr = na;
-        *cap = nc;
-    }
-    (*arr)[(*n)++] = *r;
-}
-
 static void feed_item(yt_feed *f, const cJSON *item, int depth)
 {
     yt_search_result r;
@@ -440,10 +416,7 @@ static void feed_item(yt_feed *f, const cJSON *item, int depth)
         }
         return;
     }
-    if (r.is_short)
-        push(&f->shorts, &f->nshorts, &f->shorts_cap, &r);
-    else
-        push(&f->items, &f->n, &f->cap, &r);
+    yt_feed_add(f, &r);
 }
 
 static void feed_sections(yt_feed *f, const cJSON *sections)
@@ -519,14 +492,6 @@ int yt_feed_parse_json(yt_feed *f, const char *json, int continuation_page)
         feed_sections(f, jpath(resp, "contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents"));
     cJSON_Delete(resp);
     return 0;
-}
-
-void yt_feed_free(yt_feed *f)
-{
-    free(f->items);
-    free(f->shorts);
-    free(f->continuation);
-    memset(f, 0, sizeof *f);
 }
 
 /* ---- player ------------------------------------------------------------------ */
@@ -813,63 +778,6 @@ int yt_audio_tracks(const yt_video *v, const yt_format **out, int max)
 
 /* ---- seek index (sidx) --------------------------------------------------------------- */
 
-static unsigned long long be(const unsigned char *p, int n)
-{
-    unsigned long long v = 0;
-    while (n-- > 0)
-        v = (v << 8) | *p++;
-    return v;
-}
-
-int yt_parse_sidx(const unsigned char *b, size_t len, long long base, yt_index *idx)
-{
-    unsigned long long size, timescale, ept, first, t;
-    long long off;
-    size_t pos;
-    int version, count, i;
-
-    memset(idx, 0, sizeof *idx);
-    if (len < 32 || memcmp(b + 4, "sidx", 4) != 0)
-        return -1;
-    size = be(b, 4);
-    version = b[8];
-    timescale = be(b + 16, 4);
-    if (version == 0) {
-        ept = be(b + 20, 4);
-        first = be(b + 24, 4);
-        pos = 28;
-    } else {
-        ept = be(b + 20, 8);
-        first = be(b + 28, 8);
-        pos = 36;
-    }
-    if (timescale == 0 || pos + 4 > len || size > len)
-        return -1;
-    count = (int)be(b + pos + 2, 2);
-    pos += 4;
-    if (pos + (size_t)count * 12 > len)
-        return -1;
-    idx->start = malloc(sizeof(double) * (size_t)(count + 1));
-    idx->offset = malloc(sizeof(long long) * (size_t)(count + 1));
-    if (!idx->start || !idx->offset) {
-        yt_index_free(idx);
-        return -1;
-    }
-    off = base + (long long)first;
-    t = ept;
-    for (i = 0; i < count; i++, pos += 12) {
-        unsigned long long ref = be(b + pos, 4), dur = be(b + pos + 4, 4);
-        idx->start[i] = (double)t / (double)timescale;
-        idx->offset[i] = off;
-        off += (long long)(ref & 0x7fffffff);
-        t += dur;
-    }
-    idx->start[count] = (double)t / (double)timescale; /* end */
-    idx->offset[count] = off;
-    idx->n = count;
-    return 0;
-}
-
 typedef struct {
     unsigned char *buf;
     size_t len, cap;
@@ -910,28 +818,6 @@ int yt_fetch_index(const yt_video *v, const yt_format *f, yt_index *idx, char *e
     }
     free(m.buf);
     return rc;
-}
-
-int yt_index_find(const yt_index *idx, double t)
-{
-    int lo = 0, hi = idx->n - 1;
-    if (idx->n <= 0)
-        return -1;
-    while (lo < hi) {
-        int mid = (lo + hi + 1) / 2;
-        if (idx->start[mid] <= t)
-            lo = mid;
-        else
-            hi = mid - 1;
-    }
-    return lo;
-}
-
-void yt_index_free(yt_index *idx)
-{
-    free(idx->start);
-    free(idx->offset);
-    memset(idx, 0, sizeof *idx);
 }
 
 /* ---- download --------------------------------------------------------------------- */

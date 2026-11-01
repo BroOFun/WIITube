@@ -195,6 +195,12 @@ void dr_atlas(float x, float y, float w, float h, float ax, float ay, float aw, 
 
 void dr_image(const wt_image *img, float x, float y, float w, float h, uint8_t alpha)
 {
+    dr_image_part(img, x, y, w, h, 0, 0, 1, 1, alpha);
+}
+
+void dr_image_part(const wt_image *img, float x, float y, float w, float h, float u0, float v0, float u1, float v1,
+                   uint8_t alpha)
+{
     static GXTexObj obj;
     rgba_t c = 0xffffff00u | alpha;
     if (!img || !img->tex || w <= 0 || h <= 0)
@@ -210,7 +216,10 @@ void dr_image(const wt_image *img, float x, float y, float w, float h, uint8_t a
         GX_LoadTexObj(&obj, GX_TEXMAP0);
         cur_tex = img->tex;
     }
-    quad(x, y, w, h, 0, 0, (float)img->w / img->tw, (float)img->h / img->th, c, c);
+    {
+        const float sx = (float)img->w / img->tw, sy = (float)img->h / img->th;
+        quad(x, y, w, h, u0 * sx, v0 * sy, u1 * sx, v1 * sy, c, c);
+    }
 }
 
 /* One stage of the YUV->RGB combiner: P = d op (konst-or-ras * texture), see yuv_tev.h. */
