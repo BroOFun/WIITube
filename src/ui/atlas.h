@@ -32,6 +32,10 @@ enum {
     ICON_CURSOR_FILL,
     ICON_CURSOR_EDGE,
     ICON_RING,        /* circle outline */
+    ICON_HOME,
+    ICON_SHORTS,
+    ICON_GEAR,
+    ICON_CHEVRON,     /* pointing down (mirror vertically for up) */
     ICON_COUNT
 };
 

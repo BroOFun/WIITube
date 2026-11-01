@@ -70,10 +70,38 @@ def make_icons():
     def ring(d, s):
         d.ellipse((0, 0, s - 1, s - 1), outline=255, width=int(s * 0.12))
 
+    def home(d, s):
+        d.polygon([(s * 0.5, s * 0.1), (s * 0.92, s * 0.48), (s * 0.08, s * 0.48)], fill=255)
+        d.rectangle((s * 0.2, s * 0.46, s * 0.8, s * 0.9), fill=255)
+        d.rectangle((s * 0.42, s * 0.62, s * 0.58, s * 0.9), fill=0)
+
+    def shorts(d, s):
+        # A tall rounded "phone" shape with a play triangle cut out (Shorts-like mark).
+        d.rounded_rectangle((s * 0.24, s * 0.06, s * 0.76, s * 0.94), radius=s * 0.16, fill=255)
+        d.polygon([(s * 0.42, s * 0.34), (s * 0.42, s * 0.66), (s * 0.64, s * 0.5)], fill=0)
+
+    def gear(d, s):
+        import math
+        cx = cy = s / 2
+        pts = []
+        for i in range(16):
+            r = s * (0.47 if i % 2 == 0 else 0.36)
+            a = i * math.pi / 8
+            pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+        d.polygon(pts, fill=255)
+        d.ellipse((cx - s * 0.33, cy - s * 0.33, cx + s * 0.33, cy + s * 0.33), fill=255)
+        d.ellipse((cx - s * 0.14, cy - s * 0.14, cx + s * 0.14, cy + s * 0.14), fill=0)
+
+    def chevron(d, s):  # pointing down
+        w = int(s * 0.12)
+        d.line((s * 0.15, s * 0.35, s * 0.5, s * 0.7), fill=255, width=w)
+        d.line((s * 0.5, s * 0.7, s * 0.85, s * 0.35), fill=255, width=w)
+
     white = Image.new("L", (4, 4), 255)
     return [white, icon(64, circle), icon(32, corner_inv), icon(48, play), icon(48, pause),
             icon(32, search), icon(32, volume), icon(32, back), icon(32, cursor_fill),
-            icon(32, cursor_edge), icon(64, ring)]
+            icon(32, cursor_edge), icon(64, ring), icon(32, home), icon(32, shorts), icon(32, gear),
+            icon(32, chevron)]
 
 
 class Packer:

@@ -114,7 +114,18 @@ $(BUILD)/test_yuv_tev: tests/test_yuv_tev.c src/core/yuv_tev.c src/core/yuv_tev.
 test-yuv: $(BUILD)/test_yuv_tev
 	$(BUILD)/test_yuv_tev
 
-test: test-yuv test-media test-thumbs
+TEST_YTDATA_SRCS := tests/test_ytdata.c src/core/yt.c src/core/captions.c src/core/http.c src/core/log.c \
+                    src/platform/linux/net_linux.c src/platform/linux/thread_posix.c third_party/cJSON/cJSON.c
+
+$(BUILD)/test_ytdata: $(TEST_YTDATA_SRCS) $(BUILD)/libmbedtls.a $(BUILD)/rules_builtin.o $(wildcard src/core/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(APP_FLAGS) $(MBED_DEF) $(INCS) -o $@ $(TEST_YTDATA_SRCS) $(BUILD)/rules_builtin.o \
+	    $(BUILD)/libmbedtls.a -lz -lpthread
+
+test-ytdata: $(BUILD)/test_ytdata
+	$(BUILD)/test_ytdata tests/fixtures
+
+test: test-yuv test-ytdata test-media test-thumbs
 
 test-media: $(BUILD)/test_media
 	sh tests/make_clips.sh $(BUILD)/clips
@@ -123,4 +134,4 @@ test-media: $(BUILD)/test_media
 clean:
 	rm -rf build wiitube-cli
 
-.PHONY: all clean test test-yuv test-media test-thumbs ui-preview
+.PHONY: all clean test test-yuv test-ytdata test-media test-thumbs ui-preview

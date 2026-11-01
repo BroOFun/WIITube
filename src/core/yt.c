@@ -348,6 +348,187 @@ int yt_search(const char *query, yt_search_result *out, int max, char *err, size
     return n;
 }
 
+/* ---- endless feeds --------------------------------------------------------------- */
+
+#define FEED_PARAMS_VIDEOS "EgIQAQ=="
+#define FEED_PARAMS_SHORTS "EgIQCQ=="
+
+static int seen(const yt_search_result *arr, int n, const char *id)
+{
+    int i, from = n > 300 ? n - 300 : 0; /* pages can repeat entries; check recent ones */
+    for (i = from; i < n; i++)
+        if (strcmp(arr[i].video_id, id) == 0)
+            return 1;
+    return 0;
+}
+
+static void push(yt_search_result **arr, int *n, int *cap, const yt_search_result *r)
+{
+    if (!r->video_id[0] || *n >= YT_FEED_MAX || seen(*arr, *n, r->video_id))
+        return;
+    if (*n == *cap) {
+        int nc = *cap ? *cap * 2 : 32;
+        yt_search_result *na = realloc(*arr, sizeof *na * (size_t)nc);
+        if (!na)
+            return;
+        *arr = na;
+        *cap = nc;
+    }
+    (*arr)[(*n)++] = *r;
+}
+
+static void feed_item(yt_feed *f, const cJSON *item, int depth)
+{
+    yt_search_result r;
+    const cJSON *x, *c;
+    const char *s;
+
+    if (!item || depth > 4)
+        return;
+    memset(&r, 0, sizeof r);
+    if ((x = jpath(item, "videoRenderer")) && jstr(x, "videoId")) {
+        copy_str(r.video_id, sizeof r.video_id, jstr(x, "videoId"));
+        jtext(jpath(x, "title"), r.title, sizeof r.title);
+        jtext(jpath(x, "ownerText"), r.channel, sizeof r.channel);
+        if (!r.channel[0])
+            jtext(jpath(x, "longBylineText"), r.channel, sizeof r.channel);
+        jtext(jpath(x, "lengthText"), r.duration, sizeof r.duration);
+        jtext(jpath(x, "shortViewCountText"), r.views, sizeof r.views);
+        jtext(jpath(x, "publishedTimeText"), r.published, sizeof r.published);
+        s = jstr(x, "navigationEndpoint.commandMetadata.webCommandMetadata.url");
+        r.is_short = s && strncmp(s, "/shorts/", 8) == 0;
+    } else if ((x = jpath(item, "shortsLockupViewModel"))) {
+        copy_str(r.video_id, sizeof r.video_id, jstr(x, "onTap.innertubeCommand.reelWatchEndpoint.videoId"));
+        jtext(jpath(x, "overlayMetadata.primaryText"), r.title, sizeof r.title);
+        jtext(jpath(x, "overlayMetadata.secondaryText"), r.views, sizeof r.views);
+        copy_str(r.thumb_url, sizeof r.thumb_url, jstr(x, "thumbnailViewModel.thumbnailViewModel.image.sources.0.url"));
+        if (!r.thumb_url[0])
+            copy_str(r.thumb_url, sizeof r.thumb_url, jstr(x, "thumbnail.sources.0.url"));
+        r.is_short = 1;
+    } else if ((x = jpath(item, "reelItemRenderer")) && jstr(x, "videoId")) {
+        copy_str(r.video_id, sizeof r.video_id, jstr(x, "videoId"));
+        jtext(jpath(x, "headline"), r.title, sizeof r.title);
+        jtext(jpath(x, "viewCountText"), r.views, sizeof r.views);
+        copy_str(r.thumb_url, sizeof r.thumb_url, jstr(x, "thumbnail.thumbnails.0.url"));
+        r.is_short = 1;
+    } else if ((x = jpath(item, "lockupViewModel")) && jstr(x, "contentId")) {
+        s = jstr(x, "contentType");
+        if (s && strcmp(s, "LOCKUP_CONTENT_TYPE_VIDEO") != 0)
+            return;
+        copy_str(r.video_id, sizeof r.video_id, jstr(x, "contentId"));
+        jtext(jpath(x, "metadata.lockupMetadataViewModel.title"), r.title, sizeof r.title);
+    } else {
+        /* Containers: shelves of videos or Shorts. */
+        static const char *const lists[] = {
+            "shelfRenderer.content.verticalListRenderer.items",
+            "shelfRenderer.content.horizontalListRenderer.items",
+            "gridShelfViewModel.contents",
+            "reelShelfRenderer.items",
+            "richItemRenderer.content",
+            "richSectionRenderer.content.richShelfRenderer.contents",
+            NULL,
+        };
+        int i;
+        for (i = 0; lists[i]; i++) {
+            const cJSON *l = jpath(item, lists[i]);
+            if (cJSON_IsArray(l)) {
+                cJSON_ArrayForEach(c, l)
+                    feed_item(f, c, depth + 1);
+            } else if (cJSON_IsObject(l)) {
+                feed_item(f, l, depth + 1);
+            }
+        }
+        return;
+    }
+    if (r.is_short)
+        push(&f->shorts, &f->nshorts, &f->shorts_cap, &r);
+    else
+        push(&f->items, &f->n, &f->cap, &r);
+}
+
+static void feed_sections(yt_feed *f, const cJSON *sections)
+{
+    const cJSON *sec, *item;
+    free(f->continuation);
+    f->continuation = NULL;
+    cJSON_ArrayForEach(sec, sections) {
+        const char *tok = jstr(sec, "continuationItemRenderer.continuationEndpoint.continuationCommand.token");
+        if (tok) {
+            free(f->continuation);
+            f->continuation = strdup(tok);
+            continue;
+        }
+        cJSON_ArrayForEach(item, jpath(sec, "itemSectionRenderer.contents"))
+            feed_item(f, item, 0);
+    }
+}
+
+static int feed_count(const yt_feed *f)
+{
+    return f->kind == YT_FEED_SHORTS ? f->nshorts : f->kind == YT_FEED_VIDEOS ? f->n : f->n + f->nshorts;
+}
+
+int yt_feed_start(yt_feed *f, const char *query, int kind, char *err, size_t errlen)
+{
+    cJSON *body, *resp;
+    const char *client_key;
+    yt_feed_free(f);
+    f->kind = kind;
+    copy_str(f->query, sizeof f->query, query);
+    if (ensure_rules(err, errlen) != 0)
+        return -1;
+    client_key = jstr(g_rules, "search.client");
+    body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "query", query);
+    if (kind != YT_FEED_ALL)
+        cJSON_AddStringToObject(body, "params", kind == YT_FEED_SHORTS ? FEED_PARAMS_SHORTS : FEED_PARAMS_VIDEOS);
+    resp = innertube("search", client_key ? client_key : "web", body, NULL, err, errlen);
+    if (!resp)
+        return -1;
+    feed_sections(f, jpath(resp, "contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents"));
+    cJSON_Delete(resp);
+    return feed_count(f);
+}
+
+int yt_feed_more(yt_feed *f, char *err, size_t errlen)
+{
+    cJSON *body, *resp;
+    const char *client_key;
+    int before = feed_count(f);
+    if (!f->continuation)
+        return 0;
+    client_key = jstr(g_rules, "search.client");
+    body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "continuation", f->continuation);
+    resp = innertube("search", client_key ? client_key : "web", body, NULL, err, errlen);
+    if (!resp)
+        return -1;
+    feed_sections(f, jpath(resp, "onResponseReceivedCommands.0.appendContinuationItemsAction.continuationItems"));
+    cJSON_Delete(resp);
+    return feed_count(f) - before;
+}
+
+int yt_feed_parse_json(yt_feed *f, const char *json, int continuation_page)
+{
+    cJSON *resp = cJSON_Parse(json);
+    if (!resp)
+        return -1;
+    if (continuation_page)
+        feed_sections(f, jpath(resp, "onResponseReceivedCommands.0.appendContinuationItemsAction.continuationItems"));
+    else
+        feed_sections(f, jpath(resp, "contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents"));
+    cJSON_Delete(resp);
+    return 0;
+}
+
+void yt_feed_free(yt_feed *f)
+{
+    free(f->items);
+    free(f->shorts);
+    free(f->continuation);
+    memset(f, 0, sizeof *f);
+}
+
 /* ---- player ------------------------------------------------------------------ */
 
 static void parse_mime(const char *mt, yt_format *f)
@@ -396,6 +577,13 @@ static void collect_formats(const cJSON *arr, int muxed, yt_video *v)
         f->content_length = (long long)jnum(it, "contentLength", -1);
         f->has_video = strncmp(f->mime, "video/", 6) == 0;
         f->has_audio = strncmp(f->mime, "audio/", 6) == 0 || (muxed && f->has_video);
+        f->init_end = (long long)jnum(it, "initRange.end", -1);
+        f->index_start = (long long)jnum(it, "indexRange.start", -1);
+        f->index_end = (long long)jnum(it, "indexRange.end", -1);
+        copy_str(f->audio_id, sizeof f->audio_id, jstr(it, "audioTrack.id"));
+        copy_str(f->audio_name, sizeof f->audio_name, jstr(it, "audioTrack.displayName"));
+        f->audio_default = cJSON_IsTrue(jpath(it, "audioTrack.audioIsDefault"));
+        f->is_drc = cJSON_IsTrue(jpath(it, "isDrc"));
         if (url) {
             f->url = strdup(url);
         } else if (jstr(it, "signatureCipher") || jstr(it, "cipher")) {
@@ -449,6 +637,23 @@ static int try_client(const char *video_id, const char *client_key, yt_video *v,
     v->length_seconds = (int)jnum(resp, "videoDetails.lengthSeconds", 0);
     collect_formats(jpath(resp, "streamingData.formats"), 1, v);
     collect_formats(jpath(resp, "streamingData.adaptiveFormats"), 0, v);
+    {
+        const cJSON *tracks = jpath(resp, "captions.playerCaptionsTracklistRenderer.captionTracks"), *t;
+        int count = cJSON_GetArraySize(tracks);
+        if (count > 0 && (v->captions = calloc((size_t)count, sizeof *v->captions)) != NULL) {
+            cJSON_ArrayForEach(t, tracks) {
+                yt_caption_track *c = &v->captions[v->ncaptions];
+                const char *url = jstr(t, "baseUrl"), *kind = jstr(t, "kind");
+                if (!url)
+                    continue;
+                copy_str(c->lang, sizeof c->lang, jstr(t, "languageCode"));
+                jtext(jpath(t, "name"), c->name, sizeof c->name);
+                c->asr = kind && strcmp(kind, "asr") == 0;
+                c->url = strdup(url);
+                v->ncaptions++;
+            }
+        }
+    }
     if ((s = jstr(resp, "streamingData.hlsManifestUrl")))
         v->hls_url = strdup(s);
     if (jstr(resp, "streamingData.serverAbrStreamingUrl") && usable_count(v) == 0)
@@ -509,37 +714,69 @@ void yt_video_free(yt_video *v)
         free(v->formats[i].url);
     free(v->formats);
     free(v->hls_url);
+    for (i = 0; i < v->ncaptions; i++)
+        free(v->captions[i].url);
+    free(v->captions);
     memset(v, 0, sizeof *v);
 }
 
 /* ---- format selection ----------------------------------------------------------- */
 
-int yt_pick_formats(const yt_video *v, int max_height, const yt_format **video, const yt_format **audio)
+/* How much we want an audio track: English first (as asked), then the original language,
+ * then YouTube's default; never the dynamic-range-compressed copies or audio description. */
+static int track_score(const yt_format *f, const char *want)
+{
+    char lower[64];
+    size_t i;
+    int score = 0;
+    if (want && want[0])
+        return strcmp(f->audio_id, want) == 0 ? 100 : 0;
+    for (i = 0; f->audio_name[i] && i + 1 < sizeof lower; i++)
+        lower[i] = (char)tolower((unsigned char)f->audio_name[i]);
+    lower[i] = 0;
+    if (strncmp(f->audio_id, "en", 2) == 0 && (f->audio_id[2] == '.' || f->audio_id[2] == '-' || !f->audio_id[2]))
+        score += 8;
+    if (strstr(lower, "original"))
+        score += 4;
+    if (f->audio_default)
+        score += 2;
+    if (strstr(lower, "descri"))
+        score -= 20;
+    if (f->is_drc)
+        score -= 10;
+    return score;
+}
+
+static int short_side(const yt_format *f) { return f->width && f->width < f->height ? f->width : f->height; }
+
+int yt_pick_formats2(const yt_video *v, int max_height, const char *audio_id, const yt_format **video,
+                     const yt_format **audio)
 {
     const yt_format *bv = NULL, *ba = NULL, *bm = NULL;
-    int i;
+    int i, ba_score = -1000;
 
     for (i = 0; i < v->nformats; i++) {
         const yt_format *f = &v->formats[i];
         if (!f->url)
             continue;
-        if (f->has_video && strncmp(f->codecs, "avc1", 4) == 0 && f->height > 0 && f->height <= max_height &&
-            (f->fps == 0 || f->fps <= 30)) {
+        if (f->has_video && strncmp(f->codecs, "avc1", 4) == 0 && short_side(f) > 0 &&
+            short_side(f) <= max_height && (f->fps == 0 || f->fps <= 30)) {
             const yt_format **slot = f->has_audio ? &bm : &bv;
-            if (!*slot || f->height > (*slot)->height ||
-                (f->height == (*slot)->height && f->bitrate < (*slot)->bitrate))
+            if (!*slot || short_side(f) > short_side(*slot) ||
+                (short_side(f) == short_side(*slot) && f->bitrate < (*slot)->bitrate))
                 *slot = f;
         } else if (!f->has_video && f->has_audio && strncmp(f->codecs, "mp4a", 4) == 0) {
-            /* Prefer AAC-LC (mp4a.40.2): HE-AAC (mp4a.40.5) needs the extra SBR decoding
-             * stage, which costs more CPU on the Wii. Then prefer the lower bitrate. */
-            int lc = strcmp(f->codecs, "mp4a.40.2") == 0;
-            int best_lc = ba && strcmp(ba->codecs, "mp4a.40.2") == 0;
-            if (!ba || (lc && !best_lc) || (lc == best_lc && f->bitrate < ba->bitrate))
+            /* Within the chosen track prefer AAC-LC (mp4a.40.2): HE-AAC needs extra SBR
+             * decoding, which costs more CPU on the Wii. Then the lower bitrate. */
+            int score = track_score(f, audio_id) * 4 + (strcmp(f->codecs, "mp4a.40.2") == 0 ? 2 : 0);
+            if (!ba || score > ba_score || (score == ba_score && f->bitrate < ba->bitrate)) {
                 ba = f;
+                ba_score = score;
+            }
         }
     }
     /* A single muxed stream is simpler to play; use it if it is at least as tall. */
-    if (bm && (!bv || !ba || bm->height >= bv->height)) {
+    if (bm && (!bv || !ba || short_side(bm) >= short_side(bv))) {
         *video = bm;
         *audio = NULL;
         return 0;
@@ -550,6 +787,151 @@ int yt_pick_formats(const yt_video *v, int max_height, const yt_format **video, 
         return 0;
     }
     return -1;
+}
+
+int yt_pick_formats(const yt_video *v, int max_height, const yt_format **video, const yt_format **audio)
+{
+    return yt_pick_formats2(v, max_height, NULL, video, audio);
+}
+
+int yt_audio_tracks(const yt_video *v, const yt_format **out, int max)
+{
+    int i, j, n = 0;
+    for (i = 0; i < v->nformats && n < max; i++) {
+        const yt_format *f = &v->formats[i];
+        int dup = 0;
+        if (!f->url || f->has_video || !f->audio_id[0] || strncmp(f->codecs, "mp4a", 4) != 0 || f->is_drc)
+            continue;
+        for (j = 0; j < n; j++)
+            if (strcmp(out[j]->audio_id, f->audio_id) == 0)
+                dup = 1;
+        if (!dup)
+            out[n++] = f;
+    }
+    return n;
+}
+
+/* ---- seek index (sidx) --------------------------------------------------------------- */
+
+static unsigned long long be(const unsigned char *p, int n)
+{
+    unsigned long long v = 0;
+    while (n-- > 0)
+        v = (v << 8) | *p++;
+    return v;
+}
+
+int yt_parse_sidx(const unsigned char *b, size_t len, long long base, yt_index *idx)
+{
+    unsigned long long size, timescale, ept, first, t;
+    long long off;
+    size_t pos;
+    int version, count, i;
+
+    memset(idx, 0, sizeof *idx);
+    if (len < 32 || memcmp(b + 4, "sidx", 4) != 0)
+        return -1;
+    size = be(b, 4);
+    version = b[8];
+    timescale = be(b + 16, 4);
+    if (version == 0) {
+        ept = be(b + 20, 4);
+        first = be(b + 24, 4);
+        pos = 28;
+    } else {
+        ept = be(b + 20, 8);
+        first = be(b + 28, 8);
+        pos = 36;
+    }
+    if (timescale == 0 || pos + 4 > len || size > len)
+        return -1;
+    count = (int)be(b + pos + 2, 2);
+    pos += 4;
+    if (pos + (size_t)count * 12 > len)
+        return -1;
+    idx->start = malloc(sizeof(double) * (size_t)(count + 1));
+    idx->offset = malloc(sizeof(long long) * (size_t)(count + 1));
+    if (!idx->start || !idx->offset) {
+        yt_index_free(idx);
+        return -1;
+    }
+    off = base + (long long)first;
+    t = ept;
+    for (i = 0; i < count; i++, pos += 12) {
+        unsigned long long ref = be(b + pos, 4), dur = be(b + pos + 4, 4);
+        idx->start[i] = (double)t / (double)timescale;
+        idx->offset[i] = off;
+        off += (long long)(ref & 0x7fffffff);
+        t += dur;
+    }
+    idx->start[count] = (double)t / (double)timescale; /* end */
+    idx->offset[count] = off;
+    idx->n = count;
+    return 0;
+}
+
+typedef struct {
+    unsigned char *buf;
+    size_t len, cap;
+} membuf;
+
+static int membuf_cb(void *ud, const unsigned char *data, size_t len)
+{
+    membuf *m = ud;
+    if (m->len + len > m->cap)
+        return -1;
+    memcpy(m->buf + m->len, data, len);
+    m->len += len;
+    return 0;
+}
+
+int yt_fetch_index(const yt_video *v, const yt_format *f, yt_index *idx, char *err, size_t errlen)
+{
+    membuf m;
+    int rc;
+    memset(idx, 0, sizeof *idx);
+    if (!f->url || f->index_start < 0 || f->index_end <= f->index_start) {
+        snprintf(err, errlen, "format %d has no seek index", f->itag);
+        return -1;
+    }
+    m.cap = (size_t)(f->index_end - f->index_start + 1);
+    if (m.cap > 1u << 20) {
+        snprintf(err, errlen, "seek index too large");
+        return -1;
+    }
+    m.buf = malloc(m.cap);
+    m.len = 0;
+    if (!m.buf)
+        return -1;
+    rc = yt_download_span(f->url, f->index_start, f->index_end + 1, v->user_agent, membuf_cb, &m, err, errlen);
+    if (rc == 0 && yt_parse_sidx(m.buf, m.len, f->index_end + 1, idx) != 0) {
+        snprintf(err, errlen, "could not read the seek index");
+        rc = -1;
+    }
+    free(m.buf);
+    return rc;
+}
+
+int yt_index_find(const yt_index *idx, double t)
+{
+    int lo = 0, hi = idx->n - 1;
+    if (idx->n <= 0)
+        return -1;
+    while (lo < hi) {
+        int mid = (lo + hi + 1) / 2;
+        if (idx->start[mid] <= t)
+            lo = mid;
+        else
+            hi = mid - 1;
+    }
+    return lo;
+}
+
+void yt_index_free(yt_index *idx)
+{
+    free(idx->start);
+    free(idx->offset);
+    memset(idx, 0, sizeof *idx);
 }
 
 /* ---- download --------------------------------------------------------------------- */
@@ -566,8 +948,13 @@ int yt_download(const yt_video *v, const yt_format *f, http_body_cb cb, void *ud
 int yt_download_url(const char *furl, long long total, const char *user_agent, http_body_cb cb, void *ud,
                     char *err, size_t errlen)
 {
+    return yt_download_span(furl, 0, total, user_agent, cb, ud, err, errlen);
+}
+
+int yt_download_span(const char *furl, long long start, long long end, const char *user_agent, http_body_cb cb,
+                     void *ud, char *err, size_t errlen)
+{
     char headers[512];
-    long long start = 0;
 
     snprintf(headers, sizeof headers, "User-Agent: %s\r\n",
              user_agent && user_agent[0] ? user_agent : "Mozilla/5.0");
@@ -581,12 +968,12 @@ int yt_download_url(const char *furl, long long total, const char *user_agent, h
         url = malloc(ulen);
         if (!url)
             return -1;
-        if (total > 0) {
-            long long end = start + YT_RANGE_CHUNK - 1;
-            if (end >= total)
-                end = total - 1;
-            snprintf(url, ulen, "%s&range=%lld-%lld", furl, start, end);
-            start = end + 1;
+        if (end > 0) {
+            long long last = start + YT_RANGE_CHUNK - 1;
+            if (last >= end)
+                last = end - 1;
+            snprintf(url, ulen, "%s&range=%lld-%lld", furl, start, last);
+            start = last + 1;
         } else {
             snprintf(url, ulen, "%s", furl);
         }
@@ -606,7 +993,7 @@ int yt_download_url(const char *furl, long long total, const char *user_agent, h
             return -1;
         }
         http_response_free(&resp);
-    } while (total > 0 && start < total);
+    } while (end > 0 && start < end);
     return 0;
 }
 
