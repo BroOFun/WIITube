@@ -212,6 +212,10 @@ int main(int argc, char **argv)
         return cmd_search(argc - i - 1, argv + i + 1);
     if (strcmp(argv[i], "info") == 0 && i + 1 < argc)
         return cmd_info(argv[i + 1]);
+    if (strcmp(argv[i], "dump") == 0 && i + 1 < argc) {
+        int cmd_dump(const char *dir);
+        return cmd_dump(argv[i + 1]);
+    }
     if (strcmp(argv[i], "get") == 0 && i + 1 < argc)
         return cmd_get(argc - i - 1, argv + i + 1);
     usage();

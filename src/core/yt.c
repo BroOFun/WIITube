@@ -263,6 +263,27 @@ static cJSON *innertube(const char *ep, const char *client_key, cJSON *body, int
     return out;
 }
 
+/* ---- diagnostics ---------------------------------------------------------------- */
+
+char *yt_raw(const char *ep, const char *client_key, const char *body_json, char *err, size_t errlen)
+{
+    cJSON *body, *resp;
+    char *out;
+    if (ensure_rules(err, errlen) != 0)
+        return NULL;
+    body = cJSON_Parse(body_json);
+    if (!body) {
+        snprintf(err, errlen, "request body is not JSON");
+        return NULL;
+    }
+    resp = innertube(ep, client_key, body, NULL, err, errlen);
+    if (!resp)
+        return NULL;
+    out = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return out;
+}
+
 /* ---- search ------------------------------------------------------------------ */
 
 static int add_result(const cJSON *item, yt_search_result *out, int n, int max)

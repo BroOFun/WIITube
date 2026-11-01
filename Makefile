@@ -14,7 +14,7 @@ endif
 MBED_SRCS := $(wildcard $(MBED)/library/*.c)
 MBED_OBJS := $(patsubst $(MBED)/library/%.c,$(BUILD)/mbedtls/%.o,$(MBED_SRCS))
 
-APP_SRCS := src/core/http.c src/core/yt.c src/platform/linux/net_linux.c src/cli/main.c \
+APP_SRCS := src/core/http.c src/core/yt.c src/platform/linux/net_linux.c src/cli/main.c src/cli/dump.c \
             src/platform/linux/thread_posix.c third_party/cJSON/cJSON.c
 APP_OBJS := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS)) $(BUILD)/rules_builtin.o
 

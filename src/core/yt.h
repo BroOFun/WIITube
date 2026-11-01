@@ -68,6 +68,10 @@ int yt_download_url(const char *url, long long total, const char *user_agent, ht
 /* Load rules from a JSON string (e.g. downloaded at startup). source is a label for logs. */
 int yt_load_rules_json(const char *json, const char *source, char *err, size_t errlen);
 
+/* Raw innertube request (diagnostics): body_json without "context"; returns the response
+ * as JSON text (caller frees) or NULL. */
+char *yt_raw(const char *endpoint, const char *client_key, const char *body_json, char *err, size_t errlen);
+
 /* Extract an 11-character video ID from an ID or a youtube.com / youtu.be URL. 0 on success. */
 int yt_parse_video_id(const char *in, char out[16]);
 
