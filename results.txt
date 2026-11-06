@@ -1,0 +1,123 @@
+date:   2026-11-06 16:48 UTC
+commit: 6bd12a0
+
+=== search: ./wiitube-cli search wii sports
+JybHWIzLNW0    58:32  I Played EVERY Wii Sports Game                                Xoai
+vp9l7J6w9iE  1:17:13  Wii Sports - Longplay | Wii                                   Project Longplay
+C_1fuHIpyfM    15:40  Can you LOSE in All 15 Wii Sports?                            RedFalcon
+Cld-zQ9A5Ps  1:19:38  Wii Sports - Full Game Longplay (4K 60 FPS)                   Longplay Tube
+0tX12iFeM88     7:33  Nintendo Switch Sports Resort – Overview Trailer – Ninte  Nintendo of America
+z6KKz9U8EIg  1:09:29  Longplay of Wii Sports                                        LongplayArchive
+2qvAxPqy2wA     2:25  Wii Sports - Title (HQ)                                       Rhythm Root
+bsyY9m7Q2KI    20:18  Wii Sports Resort Deserved Better                             Burback
+Gtuj5TbUCnM    28:54  white girl wii sports                                         grace
+APtylxo39A4    20:18  We Played Every Wii Sport the Way it was Meant to be Played   We Got Ice
+xy0ZHMvvUnw     2:58  The Ultimate "Wii Sports" Recap Cartoon                       Cas van de Pol
+_nd0JnjIA8E    22:36  Let’s Play: Wii Sports                                      Good Mythical MORE
+NscWoJVrEfw    44:39  The History of Wii Sports World Records                       Summoning Salt
+-oAyDnN4Vfg    19:03  wii sports is sooo funn!!!!!!!!😂😂😂😂😂           javeus
+zWk67N_2d2A    21:16  dear wii sports basketball.                                   javeus
+Lk2MPW5DBJY     9:05  Nintendo Switch Sports Resort Review                          IGN
+xlJ6-3oByto    23:51  The Death of Wii Sports                                       MewZe
+aMrfoPvplrQ    41:33  Beta64 - Wii Sports Resort / Wii MotionPlus                   Beta64
+UVO_4eYGK5E    20:34  Why Lucia Is Wii Sports' Perfect Champion                     Rajeem
+TFkgaR16hiw    19:34  Wii Sports Obscurities                                        RB77
+--> search: OK
+
+=== info: ./wiitube-cli info dQw4w9WgXcQ
+dQw4w9WgXcQ  "Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)" by Rick Astley, 213 s (client: visionos)
+itag  type        codecs                     res        fps  kbps    size     url
+313   video/webm  vp9                        3840x2160   25  18076    342.0M  direct
+401   video/mp4   av01.0.12M.08              3840x2160   25  17400    229.2M  direct
+271   video/webm  vp9                        2560x1440   25   8978    144.1M  direct
+400   video/mp4   av01.0.12M.08              2560x1440   25   7755    116.5M  direct
+137   video/mp4   avc1.640028                1920x1080   25   4334     77.2M  direct
+248   video/webm  vp9                        1920x1080   25   1549     29.4M  direct
+399   video/mp4   av01.0.08M.08              1920x1080   25   1594     29.0M  direct
+136   video/mp4   avc1.4D401F                1280x720    25   1058     25.2M  direct
+247   video/webm  vp9                        1280x720    25    867     16.9M  direct
+398   video/mp4   av01.0.05M.08              1280x720    25   1012     16.8M  direct
+135   video/mp4   avc1.4D401E                854x480     25    690     13.5M  direct
+244   video/webm  vp9                        854x480     25    466      8.9M  direct
+397   video/mp4   av01.0.04M.08              854x480     25    525      9.4M  direct
+134   video/mp4   avc1.4D401E                640x360     25    450      8.0M  direct
+243   video/webm  vp9                        640x360     25    288      5.7M  direct
+396   video/mp4   av01.0.01M.08              640x360     25    304      5.4M  direct
+133   video/mp4   avc1.4D4015                426x240     25    236      4.1M  direct
+242   video/webm  vp9                        426x240     25    131      2.6M  direct
+395   video/mp4   av01.0.00M.08              426x240     25    159      3.0M  direct
+160   video/mp4   avc1.4D400C                256x144     25    109      2.0M  direct
+278   video/webm  vp9                        256x144     25     68      1.5M  direct
+394   video/mp4   av01.0.00M.08              256x144     25     83      1.4M  direct
+139   audio/mp4   mp4a.40.5                  audio        0     50      1.2M  direct
+140   audio/mp4   mp4a.40.2                  audio        0    130      3.3M  direct
+249   audio/webm  opus                       audio        0     49      1.2M  direct
+250   audio/webm  opus                       audio        0     65      1.6M  direct
+251   audio/webm  opus                       audio        0    136      3.3M  direct
+HLS manifest available
+captions: en "English"
+captions: en "English (auto-generated)" (auto)
+captions: de-DE "German (Germany)"
+captions: ja "Japanese"
+captions: pt-BR "Portuguese (Brazil)"
+captions: es-419 "Spanish (Latin America)"
+--> info: OK
+
+=== get: ./wiitube-cli get dQw4w9WgXcQ -q 240 -o test-output/test
+downloading itag 133 (video/mp4 avc1.4D4015) -> test-output/test.video.mp4
+  10%
+  20%
+  30%
+  40%
+  50%
+  60%
+  70%
+  80%
+  90%
+  100%
+  done, 4310122 bytes
+downloading itag 140 (audio/mp4 mp4a.40.2) -> test-output/test.audio.m4a
+  10%
+  20%
+  30%
+  40%
+  50%
+  60%
+  70%
+  80%
+  90%
+  100%
+  done, 3449447 bytes
+--> get: OK
+
+=== decode-check test.audio.m4a: ffprobe -v error -show_entries stream=codec_name,width,height,sample_rate -of compact=p=0 test-output/test.audio.m4a
+codec_name=aac|sample_rate=44100
+--> decode-check test.audio.m4a: OK
+
+=== decode-check test.video.mp4: ffprobe -v error -show_entries stream=codec_name,width,height,sample_rate -of compact=p=0 test-output/test.video.mp4
+codec_name=h264|width=426|height=240
+--> decode-check test.video.mp4: OK
+
+=== seek: sh -c "./wiitube-cli" seek "dQw4w9WgXcQ" 60 -q 240 -o "test-output/seek" | tee "test-output/seek.txt"
+downloading itag 133 header (0-739) + 1262194-4310122 -> test-output/seek.video.mp4
+downloading itag 140 header (0-722) + 809311-3449447 -> test-output/seek.audio.m4a
+video: 38 pieces, 213.04 s; 60.0 s is in piece 10, which starts at 55.400 s (byte 1262194)
+audio: 22 pieces; piece 5 starts at 49.923 s (byte 809311)
+expect: video 55.400 audio 49.923
+--> seek: OK
+
+=== seek-timestamps: seek_check
+video first frame at 55.400000, s (index says 55.400), audio at 49.922902 s (index says 49.923)
+--> seek-timestamps: OK
+
+=== captions: ./wiitube-cli captions dQw4w9WgXcQ 20
+track 0: en "English"
+track 1: en "English (auto-generated)" (auto)
+track 2: de-DE "German (Germany)"
+track 3: ja "Japanese"
+track 4: pt-BR "Portuguese (Brazil)"
+track 5: es-419 "Spanish (Latin America)"
+using "English": 61 cues; at 20.0 s: ♪ We're no strangers to love ♪
+--> captions: OK
+
+summary: 0 step(s) failed

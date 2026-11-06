@@ -1,0 +1,35 @@
+[92.344] loading first page of "Gaming" (search)
+[93.162] loaded 42 entries for "Gaming" (now 42, 26 Shorts in 2 shelves)
+[94.683] chip "Music"
+[94.715] loading first page of "Music" (search)
+[95.908] loaded 61 entries for "Music" (now 61, 25 Shorts in 2 shelves)
+[99.071] search "wii sports"
+[99.102] loading first page of "wii sports" (search)
+[99.854] loaded 52 entries for "wii sports" (now 52, 25 Shorts in 2 shelves)
+[104.217] loading next page of "wii sports" (search)
+[104.969] loaded 27 entries for "wii sports" (now 79, 40 Shorts in 4 shelves)
+[107.281] chip "For you"
+[107.312] loading first page of "JybHWIzLNW0" (recommendations)
+[107.878] loaded 20 entries for "JybHWIzLNW0" (now 20, 0 Shorts in 0 shelves)
+home: "Gaming" kind 2: 42 entries, 26 Shorts in 2 shelves, more: yes
+  30B9HuAyfg8 | 20 Game of The Year Contenders of 2026 | gameranx
+  zORAazJQOkw | Even The Boss Is Playing Dirty | Daily Dose of Gaming
+  eJB1k_UVwtw | This is peak gaming.. | Asmongold TV  
+chip: "Music" kind 2: 61 entries, 25 Shorts in 2 shelves, more: yes
+  _zUZKuwuET0 | THE BEST MORNING MUSIC - Wake Up Happiness, Peace & Beautifu | Morning Music
+  u9Dg-g7t2l4 | Disturbed  - The Sound Of Silence (Official Music Video) [4K | Disturbed
+  HqZ1VJ0w_ao | Peaceful November Morning Jazz for a Good Day 🍂 Autumn Po | Sweet Jazz Cafe
+search: "wii sports" kind 2: 52 entries, 25 Shorts in 2 shelves, more: yes
+  JybHWIzLNW0 | I Played EVERY Wii Sports Game | Xoai
+  _nd0JnjIA8E | Let’s Play: Wii Sports | Good Mythical MORE
+  scnFH-MldJM | Wii Sports Theme Tune 10 hours | Cameron Cork
+search, scrolled: "wii sports" kind 2: 79 entries, 40 Shorts in 4 shelves, more: yes
+  JybHWIzLNW0 | I Played EVERY Wii Sports Game | Xoai
+  _nd0JnjIA8E | Let’s Play: Wii Sports | Good Mythical MORE
+  scnFH-MldJM | Wii Sports Theme Tune 10 hours | Cameron Cork
+for you: "JybHWIzLNW0" kind 3: 20 entries, 0 Shorts in 0 shelves, more: yes
+  jRato6ck7Ik | Beating Every Wii Sports & Resort Champion | Poppt1
+  qEO7MmHHVmI | Ranking All 37 Mario "Sports" Games | Switch Stop
+  5jW2TsgPxno | Wii Sports Resort - Nostalgia Rewind | Nintendo Hero
+connections: 3 opened, 66 reused
+app simulation passed

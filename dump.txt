@@ -1,0 +1,28 @@
+saved search_videos.json (615162 bytes)
+saved search_all.json (1572772 bytes)
+saved search_cont.json (890794 bytes)
+saved search_shorts.json (1036120 bytes)
+saved reel_seq.json (361220 bytes)
+Shorts feed: 27 videos
+saved reel_seq_cont.json (175978 bytes)
+saved reel_seq_built.json (303296 bytes)
+Shorts feed from a built start (CgtQZC10NXNOaFdjaw==): 11 videos
+saved reel_item.json (55176 bytes)
+saved home.json (15307 bytes)
+saved home_tv.json (3242 bytes)
+home_tv_samsung.json: FAILED browse: HTTP 400 - Precondition check failed.
+saved home_mweb.json (14005 bytes)
+trending.json: FAILED browse: HTTP 400 - Request contains an invalid argument.
+explore.json: FAILED browse: HTTP 400 - Request contains an invalid argument.
+saved next_rick.json (467506 bytes)
+saved next_tv_rick.json (133135 bytes)
+shorts_tab.json: FAILED browse: HTTP 400 - Request contains an invalid argument.
+saved player_rick.json (89759 bytes)
+rick_captions.json3: HTTP 200
+saved rick_captions.json3 (8325 bytes)
+rick_video_head.bin: HTTP 206
+saved rick_video_head.bin (1229 bytes)
+rick_audio_head.bin: HTTP 206
+saved rick_audio_head.bin (1028 bytes)
+saved player_dub.json (741 bytes)
+saved player_tv_dub.json (570 bytes)
