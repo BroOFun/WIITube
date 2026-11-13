@@ -1,0 +1,35 @@
+[149.968] loading first page of "Gaming" (search)
+[150.856] loaded 37 entries for "Gaming" (now 37, 25 Shorts in 2 shelves)
+[152.573] chip "Music"
+[152.606] loading first page of "Music" (search)
+[153.757] loaded 41 entries for "Music" (now 41, 25 Shorts in 2 shelves)
+[157.306] search "wii sports"
+[157.338] loading first page of "wii sports" (search)
+[158.091] loaded 54 entries for "wii sports" (now 54, 25 Shorts in 2 shelves)
+[163.410] loading next page of "wii sports" (search)
+[164.405] loaded 27 entries for "wii sports" (now 81, 39 Shorts in 4 shelves)
+[167.062] chip "For you"
+[167.095] loading first page of "JybHWIzLNW0" (recommendations)
+[167.621] loaded 20 entries for "JybHWIzLNW0" (now 20, 0 Shorts in 0 shelves)
+home: "Gaming" kind 2: 37 entries, 25 Shorts in 2 shelves, more: yes
+  cJPS_1Yb-ts | We NEED to Talk About the State of Gaming | Pixel Game Squad
+  79sx-zwYxAE | Gaming is Changing... (again) | Upper Echelon
+  v62Tj9byHlA | Qualitying The Life Out of Games | Razbuten
+chip: "Music" kind 2: 41 entries, 25 Shorts in 2 shelves, more: yes
+  DYHHNQsGUVQ | Ravyn Lenae - Love Me Not (Lyrics) | NewMelody
+  iR2LyVq8VYI | Midnight Whiskey Blues 🍂 Slow Blues for Late Night Relaxi | Midnight Blues Lounge
+  aGGXYOyXaC0 | Alyssa Grace - bloodstream (Lyrics) | NewMelody
+search: "wii sports" kind 2: 54 entries, 25 Shorts in 2 shelves, more: yes
+  JybHWIzLNW0 | I Played EVERY Wii Sports Game | Xoai
+  zq6b5KyYBrE | Wii Sports - All Sports (4 Players, Maurits vs Rik vs Myrte  | NintendoMovies
+  wWo6zYZx2rM | Wii Sports Resort (Wii) - Longplay | Mariofan98 Longplays
+search, scrolled: "wii sports" kind 2: 81 entries, 39 Shorts in 4 shelves, more: yes
+  JybHWIzLNW0 | I Played EVERY Wii Sports Game | Xoai
+  zq6b5KyYBrE | Wii Sports - All Sports (4 Players, Maurits vs Rik vs Myrte  | NintendoMovies
+  wWo6zYZx2rM | Wii Sports Resort (Wii) - Longplay | Mariofan98 Longplays
+for you: "JybHWIzLNW0" kind 3: 20 entries, 0 Shorts in 0 shelves, more: yes
+  rA4LRK2rvho | I Spent 24 Hours in Nintendo's HARDEST Game | Russ Vandy
+  C_1fuHIpyfM | Can you LOSE in All 15 Wii Sports? | RedFalcon
+  iTcY2Sh39KM | I Played 100 Years Of Nintendo! | EmSwizzle
+connections: 3 opened, 67 reused
+app simulation passed
