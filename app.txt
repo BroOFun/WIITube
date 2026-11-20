@@ -1,0 +1,35 @@
+[141.296] loading first page of "Gaming" (search)
+[142.174] loaded 38 entries for "Gaming" (now 38, 25 Shorts in 2 shelves)
+[143.676] chip "Music"
+[143.707] loading first page of "Music" (search)
+[144.679] loaded 53 entries for "Music" (now 53, 25 Shorts in 2 shelves)
+[147.787] search "wii sports"
+[147.819] loading first page of "wii sports" (search)
+[148.569] loaded 54 entries for "wii sports" (now 54, 25 Shorts in 2 shelves)
+[152.936] loading next page of "wii sports" (search)
+[153.451] loaded 26 entries for "wii sports" (now 80, 40 Shorts in 4 shelves)
+[155.783] chip "For you"
+[155.815] loading first page of "vp9l7J6w9iE" (recommendations)
+[156.347] loaded 20 entries for "vp9l7J6w9iE" (now 20, 0 Shorts in 0 shelves)
+home: "Gaming" kind 2: 38 entries, 25 Shorts in 2 shelves, more: yes
+  aVjtYuBZZ0M | The Gaming Industry Is About To Pay A Terrible Price | OhNoItsAlexx
+  YZu80JVeeqU | My Favorite Indie Games Of 2026 | Mortismal Gaming
+  XLabFiVil58 | We Pitched Offensive Video Games To Strangers | Family Friendly
+chip: "Music" kind 2: 53 entries, 25 Shorts in 2 shelves, more: yes
+  SlQf-4zPNSQ | Fall Coffee Shop Ambience with Warm Jazz 🍂 Smooth Jazz In | Relax Jazz Cafe
+  CpBJGvwqntI | Top 50 Christmas Songs of All Time 🎄 Best Christmas Songs | Christmas Songs and Carols - Love to Sing
+  53REyW5NtvA | Music Mix 2026 | Party Club Dance 2026 | Best Remixes Of Pop | Dj Silviu M Official
+search: "wii sports" kind 2: 54 entries, 25 Shorts in 2 shelves, more: yes
+  vp9l7J6w9iE | Wii Sports - Longplay | Wii | Project Longplay
+  2qvAxPqy2wA | Wii Sports - Title (HQ) | Rhythm Root
+  P_TD1YF6jyQ | Wii Sports - Baseball (Skill Level 0 - Champion) | AwesomeGamerland
+search, scrolled: "wii sports" kind 2: 80 entries, 40 Shorts in 4 shelves, more: yes
+  vp9l7J6w9iE | Wii Sports - Longplay | Wii | Project Longplay
+  2qvAxPqy2wA | Wii Sports - Title (HQ) | Rhythm Root
+  P_TD1YF6jyQ | Wii Sports - Baseball (Skill Level 0 - Champion) | AwesomeGamerland
+for you: "vp9l7J6w9iE" kind 3: 20 entries, 0 Shorts in 0 shelves, more: yes
+  Q5CfTyF3sOQ | Wii Sports Resort - Swordplay Showdown: Stages 1-10 (Untouch | Adriaan
+  P_TD1YF6jyQ | Wii Sports - Baseball (Skill Level 0 - Champion) | AwesomeGamerland
+  RjK90DlRvZ8 | My Hacked Wii Menu (UPDATED) | Minesteve
+connections: 3 opened, 61 reused
+app simulation passed
