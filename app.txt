@@ -1,0 +1,35 @@
+[199.198] loading first page of "Gaming" (search)
+[200.045] loaded 35 entries for "Gaming" (now 35, 25 Shorts in 2 shelves)
+[201.532] chip "Music"
+[201.564] loading first page of "Music" (search)
+[202.816] loaded 46 entries for "Music" (now 46, 25 Shorts in 2 shelves)
+[205.852] search "wii sports"
+[205.883] loading first page of "wii sports" (search)
+[206.666] loaded 54 entries for "wii sports" (now 54, 25 Shorts in 2 shelves)
+[211.415] loading next page of "wii sports" (search)
+[212.103] loaded 23 entries for "wii sports" (now 77, 40 Shorts in 4 shelves)
+[214.431] chip "For you"
+[214.463] loading first page of "8OLIJDaot7Y" (recommendations)
+[215.121] loaded 20 entries for "8OLIJDaot7Y" (now 20, 0 Shorts in 0 shelves)
+home: "Gaming" kind 2: 35 entries, 25 Shorts in 2 shelves, more: yes
+  _uwXKUEMtW0 | 10 Best NEW Games To Play In December 2026 | Force Gaming
+  gucDbIbsOAc | Top 10 NEW Games of December 2026 | gameranx
+  ZDeaO8OvjSk | I Challenged 4 Tech YouTubers to Build the Best $1000 Gaming | Linus Tech Tips and 4 more
+chip: "Music" kind 2: 46 entries, 25 Shorts in 2 shelves, more: yes
+  JWZ5mOHwLhA | Best of 80s Music Legends - Cyndi Lauper, Tears For Fears, M | Pure 80s Retro
+  mk2Mmhtk6yQ | Ella Langley - Choosin Texas (Lyrics) | Dan Music
+  yLY7xc3w7wM | 90’S Old Hindi Songs💗 90s Love Song💛Udit Narayan, Al | Anish Golu Official
+search: "wii sports" kind 2: 54 entries, 25 Shorts in 2 shelves, more: yes
+  8OLIJDaot7Y | Wii Sports Resorts Horrifying "Easter Egg" | Cyzstix
+  vp9l7J6w9iE | Wii Sports - Longplay | Wii | Project Longplay
+  2qvAxPqy2wA | Wii Sports - Title (HQ) | Rhythm Root
+search, scrolled: "wii sports" kind 2: 77 entries, 40 Shorts in 4 shelves, more: yes
+  8OLIJDaot7Y | Wii Sports Resorts Horrifying "Easter Egg" | Cyzstix
+  vp9l7J6w9iE | Wii Sports - Longplay | Wii | Project Longplay
+  2qvAxPqy2wA | Wii Sports - Title (HQ) | Rhythm Root
+for you: "8OLIJDaot7Y" kind 3: 20 entries, 0 Shorts in 0 shelves, more: yes
+  DUFSIkhoqdI | What The Internet Did To Sesame Street | [Sleepyz]
+  LIB0rOeK240 | Strangest Things Found on Bootleg DVDs | ShaiiValley
+  X47Hz9eItYo | Exploring Roblox's Disturbing Quiz Game | Cyzstix
+connections: 3 opened, 65 reused
+app simulation passed
